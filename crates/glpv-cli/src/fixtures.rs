@@ -17,7 +17,6 @@ pub fn materialize(spec_path: &Path, root: &Path) -> PathBuf {
     let spec: toml::Table = spec_text.parse().expect("spec.toml parses");
 
     let dir_name = spec["dir"].as_str().expect("dir");
-    let remote = spec["remote"].as_str().expect("remote");
     let default_branch = spec["default_branch"].as_str().expect("default_branch");
 
     let mut hasher = DefaultHasher::new();
@@ -26,13 +25,54 @@ pub fn materialize(spec_path: &Path, root: &Path) -> PathBuf {
 
     let clone_dir = root.join(dir_name);
     let marker = clone_dir.join(".glpv-spec-hash");
-    if marker.exists() && std::fs::read_to_string(&marker).ok().as_deref() == Some(&hash) {
+    let marker_valid = |m: &Path| std::fs::read_to_string(m).ok().as_deref() == Some(hash.as_str());
+    if marker_valid(&marker) {
         return clone_dir;
     }
-    let _ = std::fs::remove_dir_all(&clone_dir);
-    std::fs::create_dir_all(&clone_dir).unwrap();
 
-    git(&clone_dir, &["init", "-q", "-b", default_branch]);
+    // Tests materialise fixtures concurrently — threads within one binary and
+    // separate test binaries sharing a root — so building (and replacing a
+    // stale build) must be mutually exclusive with anyone else building or
+    // already reading the directory. `create_dir` is atomic on every platform
+    // and works across processes; it is the lock. Once a valid marker exists
+    // nobody touches the directory again, so readers that saw a valid marker
+    // are never swapped out from under.
+    let lock = root.join(format!(".lock-{dir_name}"));
+    let started = std::time::Instant::now();
+    loop {
+        if marker_valid(&marker) {
+            return clone_dir;
+        }
+        match std::fs::create_dir(&lock) {
+            Ok(()) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                if started.elapsed().as_secs() > 120 {
+                    // a crashed builder left the lock behind; steal it
+                    let _ = std::fs::remove_dir(&lock);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            Err(e) => panic!("cannot lock fixture {}: {e}", lock.display()),
+        }
+    }
+    let result = (|| {
+        if marker_valid(&marker) {
+            return clone_dir.clone();
+        }
+        std::fs::remove_dir_all(&clone_dir)
+            .or_else(|e| if clone_dir.exists() { Err(e) } else { Ok(()) })
+            .unwrap_or_else(|e| panic!("cannot clear stale fixture {}: {e}", clone_dir.display()));
+        std::fs::create_dir_all(&clone_dir).unwrap();
+        build_into(&clone_dir, &spec, default_branch, &hash);
+        clone_dir.clone()
+    })();
+    let _ = std::fs::remove_dir(&lock);
+    result
+}
+
+fn build_into(clone_dir: &Path, spec: &toml::Table, default_branch: &str, hash: &str) {
+    let remote = spec["remote"].as_str().expect("remote");
+    git(clone_dir, &["init", "-q", "-b", default_branch]);
     git(&clone_dir, &["config", "commit.gpgsign", "false"]);
     git(&clone_dir, &["remote", "add", "origin", remote]);
     // The marker must not become part of the fixture's tree.
@@ -75,8 +115,7 @@ pub fn materialize(spec_path: &Path, root: &Path) -> PathBuf {
     }
     git(&clone_dir, &["checkout", "-q", default_branch]);
 
-    std::fs::write(&marker, &hash).unwrap();
-    clone_dir
+    std::fs::write(clone_dir.join(".glpv-spec-hash"), hash).unwrap();
 }
 
 /// Materialise every `*.toml` (or `<name>/spec.toml`) under `specs` into `root`.

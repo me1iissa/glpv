@@ -3,6 +3,7 @@
 stages:
   - check
   - test
+  - release
 
 .rust:
   image: rust:1.94-bookworm
@@ -46,3 +47,73 @@ dogfood:
     paths:
       - glpv-out/
     expire_in: 1 week
+
+# ---------- release builds (tags vX.Y.Z) ----------
+# Binaries build only on version tags, after check + test pass, and are
+# uploaded to the project's generic package registry (permanent URLs); the
+# publish job then creates the GitLab Release with links to them.
+
+.release:
+  extends: .rust
+  stage: release
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/'
+  variables:
+    PKG_URL: $CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/glpv/$CI_COMMIT_TAG
+
+release:linux-x86_64:
+  extends: .release
+  script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends musl-tools
+    - rustup target add x86_64-unknown-linux-musl
+    - cargo build --release --locked -p glpv-cli --target x86_64-unknown-linux-musl
+    - PKG=glpv-$CI_COMMIT_TAG-x86_64-unknown-linux-musl
+    - mkdir -p dist/$PKG
+    - cp target/x86_64-unknown-linux-musl/release/glpv README.md LICENSE dist/$PKG/
+    - strip dist/$PKG/glpv
+    - tar -C dist -czf dist/$PKG.tar.gz $PKG
+    - sha256sum dist/$PKG.tar.gz | tee -a dist/SHA256SUMS
+    - 'curl --fail --silent --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file dist/$PKG.tar.gz "$PKG_URL/$PKG.tar.gz"'
+  artifacts:
+    paths: [dist/SHA256SUMS]
+    expire_in: 1 week
+
+release:windows-x86_64:
+  extends: .release
+  script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends gcc-mingw-w64-x86-64 zip
+    - rustup target add x86_64-pc-windows-gnu
+    - cargo build --release --locked -p glpv-cli --target x86_64-pc-windows-gnu
+    - PKG=glpv-$CI_COMMIT_TAG-x86_64-pc-windows-gnu
+    - mkdir -p dist/$PKG
+    - cp target/x86_64-pc-windows-gnu/release/glpv.exe README.md LICENSE dist/$PKG/
+    - (cd dist && zip -qr $PKG.zip $PKG)
+    - sha256sum dist/$PKG.zip | tee -a dist/SHA256SUMS
+    - 'curl --fail --silent --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file dist/$PKG.zip "$PKG_URL/$PKG.zip"'
+  artifacts:
+    paths: [dist/SHA256SUMS]
+    expire_in: 1 week
+
+release:publish:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs: ["release:linux-x86_64", "release:windows-x86_64"]
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/'
+  script:
+    # the tag must match the workspace version
+    - VER=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+    - echo "workspace version $VER, tag $CI_COMMIT_TAG"
+    - test "v$VER" = "$CI_COMMIT_TAG"
+    - cat dist/SHA256SUMS
+  release:
+    tag_name: $CI_COMMIT_TAG
+    description: >
+      glpv $CI_COMMIT_TAG — static Linux (x86_64, musl) and Windows (x86_64)
+      binaries. Checksums are in the SHA256SUMS job artifact of the build jobs.
+    assets:
+      links:
+        - name: glpv-$CI_COMMIT_TAG-x86_64-unknown-linux-musl.tar.gz
+          url: $CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/glpv/$CI_COMMIT_TAG/glpv-$CI_COMMIT_TAG-x86_64-unknown-linux-musl.tar.gz
+        - name: glpv-$CI_COMMIT_TAG-x86_64-pc-windows-gnu.zip
+          url: $CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/glpv/$CI_COMMIT_TAG/glpv-$CI_COMMIT_TAG-x86_64-pc-windows-gnu.zip
