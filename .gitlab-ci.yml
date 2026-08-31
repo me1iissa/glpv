@@ -1,0 +1,48 @@
+# CI for glpv itself. The dogfood job runs glpv over this very file.
+
+stages:
+  - check
+  - test
+
+.rust:
+  image: rust:1.94-bookworm
+  variables:
+    CARGO_HOME: $CI_PROJECT_DIR/.cargo
+  cache:
+    key:
+      files:
+        - Cargo.lock
+    paths:
+      - .cargo/registry
+      - target
+
+fmt:
+  extends: .rust
+  stage: check
+  script:
+    - rustup component add rustfmt
+    - cargo fmt --all -- --check
+
+clippy:
+  extends: .rust
+  stage: check
+  script:
+    - rustup component add clippy
+    - cargo clippy --workspace --all-targets -- -D warnings
+
+test:
+  extends: .rust
+  stage: test
+  script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends python3-yaml
+    - cargo test --workspace
+
+dogfood:
+  extends: .rust
+  stage: test
+  script:
+    - cargo run -p glpv-cli -- scan --file .gitlab-ci.yml -o glpv-out
+  artifacts:
+    paths:
+      - glpv-out/
+    expire_in: 1 week

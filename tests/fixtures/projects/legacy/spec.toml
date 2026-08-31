@@ -1,0 +1,34 @@
+# Fixture 9: legacy only/except, manual outside rules, allow_failure exit
+# codes, needs: [].
+
+dir = "legacy-project"
+remote = "git@fixtures.local:fx/legacy.git"
+default_branch = "master"
+
+[[commits]]
+message = "legacy ci"
+
+[commits.files]
+".gitlab-ci.yml" = '''
+stages: [build, deploy]
+
+compile:
+  stage: build
+  script: [make]
+  only: [branches]
+  except: [schedules]
+
+release:
+  stage: deploy
+  when: manual
+  script: [make release]
+  allow_failure:
+    exit_codes: [42, 137]
+  needs: []
+
+old-style:
+  stage: deploy
+  script: [ship]
+  only:
+    refs: [main, /^release-.*$/]
+'''

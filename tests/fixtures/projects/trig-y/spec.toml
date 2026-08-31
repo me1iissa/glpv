@@ -1,0 +1,14 @@
+dir = "ty"
+remote = "git@fixtures.local:fx/trig-y.git"
+default_branch = "main"
+
+[[commits]]
+message = "downstream"
+
+[commits.files]
+".gitlab-ci.yml" = '''
+build:
+  script: [make]
+  artifacts:
+    paths: [out/]
+'''

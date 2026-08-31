@@ -1,0 +1,16 @@
+[package]
+name = "glpv-yaml"
+description = "Span-preserving YAML loader with Psych (Ruby/GitLab) scalar semantics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+saphyr-parser = { workspace = true }
+indexmap = { workspace = true }
+thiserror = { workspace = true }
+regex = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }

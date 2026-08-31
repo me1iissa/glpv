@@ -1,0 +1,35 @@
+# Triggered by shop at a variable branch; consumes ci-templates as a CI/CD
+# component (pinned tag resolves locally; ~latest needs the catalog API) and
+# launches a dynamic child pipeline from a generated artifact.
+
+dir = "analytics"
+remote = "git@gitlab.example.com:pipelines-demo/analytics.git"
+default_branch = "main"
+
+[[commits]]
+message = "analytics ci"
+
+[commits.files]
+".gitlab-ci.yml" = '''
+include:
+  - component: gitlab.example.com/pipelines-demo/ci-templates/rust@1.0.0
+  - component: gitlab.example.com/pipelines-demo/ci-templates/rust@~latest
+
+stages: [ingest, report]
+
+generate-report-config:
+  stage: ingest
+  extends: .rust-base
+  script:
+    - python gen.py > report-config.yml
+  artifacts:
+    paths: [report-config.yml]
+
+run-report:
+  stage: report
+  trigger:
+    include:
+      - artifact: report-config.yml
+        job: generate-report-config
+'''
+"README.md" = "# pipelines-demo/analytics\n"

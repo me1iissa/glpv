@@ -1,0 +1,51 @@
+---
+source: crates/glpv-cli/tests/snapshots.rs
+expression: "glpv_render::render_dot(&output.graph)"
+---
+digraph glpv {
+  rankdir=LR;
+  compound=true;
+  newrank=true;
+  graph [fontname="Helvetica"];
+  node [shape=box style="rounded,filled" fillcolor="#f6f8fa" fontname="Helvetica" fontsize=10];
+  edge [fontname="Helvetica" fontsize=9];
+
+  subgraph "cluster_p_0105459a4828afc1" {
+    label="fixtures.local/fx/app @ main — .gitlab-ci.yml";
+    style="rounded,filled"; fillcolor="#ffffff"; color="#8250df"; fontsize=11;
+    subgraph "cluster_p_0105459a4828afc1_s0" {
+      label=".pre"; rank=same; style=dashed; color="#d0d7de"; fontsize=10;
+      "p-0105459a4828afc1/setup" [label="setup" tooltip="stage: .pre"];
+    }
+    subgraph "cluster_p_0105459a4828afc1_s2" {
+      label="build"; rank=same; style=dashed; color="#d0d7de"; fontsize=10;
+      "p-0105459a4828afc1/build" [label="build" tooltip="stage: build"];
+      "p-0105459a4828afc1/bad-needs" [label="bad-needs" tooltip="stage: build"];
+    }
+    "p-0105459a4828afc1/setup" -> "p-0105459a4828afc1/build" [style=invis weight=100];
+    subgraph "cluster_p_0105459a4828afc1_s3" {
+      label="test"; rank=same; style=dashed; color="#d0d7de"; fontsize=10;
+      "p-0105459a4828afc1/test-matrix: [linux, x64]" [label="test-matrix: [linux, x64]" tooltip="stage: test"];
+      "p-0105459a4828afc1/test-matrix: [linux, arm64]" [label="test-matrix: [linux, arm64]" tooltip="stage: test"];
+      "p-0105459a4828afc1/test-count 1/2" [label="test-count 1/2" tooltip="stage: test"];
+      "p-0105459a4828afc1/test-count 2/2" [label="test-count 2/2" tooltip="stage: test"];
+    }
+    "p-0105459a4828afc1/build" -> "p-0105459a4828afc1/test-matrix: [linux, x64]" [style=invis weight=100];
+    subgraph "cluster_p_0105459a4828afc1_s4" {
+      label="deploy"; rank=same; style=dashed; color="#d0d7de"; fontsize=10;
+      "p-0105459a4828afc1/deploy" [label="deploy" fillcolor="#ffd8b5" peripheries=2 tooltip="stage: deploy"];
+      "p-0105459a4828afc1/pages" [label="pages" tooltip="stage: deploy"];
+    }
+    "p-0105459a4828afc1/test-matrix: [linux, x64]" -> "p-0105459a4828afc1/deploy" [style=invis weight=100];
+    subgraph "cluster_p_0105459a4828afc1_s5" {
+      label=".post"; rank=same; style=dashed; color="#d0d7de"; fontsize=10;
+      "p-0105459a4828afc1/cleanup" [label="cleanup" tooltip="stage: .post"];
+    }
+    "p-0105459a4828afc1/deploy" -> "p-0105459a4828afc1/cleanup" [style=invis weight=100];
+    "p-0105459a4828afc1/build" -> "p-0105459a4828afc1/test-matrix: [linux, x64]" [style=solid color="#0969da"];
+    "p-0105459a4828afc1/test-matrix: [linux, x64]" -> "p-0105459a4828afc1/test-count 1/2" [style=solid color="#0969da"];
+    "p-0105459a4828afc1/test-matrix: [linux, x64]" -> "p-0105459a4828afc1/deploy" [style=solid color="#0969da"];
+    "p-0105459a4828afc1/deploy" -> "p-0105459a4828afc1/bad-needs" [style=solid color="#0969da"];
+  }
+
+}

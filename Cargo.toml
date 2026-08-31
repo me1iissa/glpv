@@ -1,0 +1,43 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/glpv-yaml",
+    "crates/glpv-core",
+    "crates/glpv-render",
+    "crates/glpv-cli",
+    "crates/glpv-wasm",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.88"
+
+[workspace.dependencies]
+saphyr-parser = "=0.0.12"
+indexmap = { version = "2", features = ["serde"] }
+thiserror = "2"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+regex = "1.13"
+globset = "0.4"
+semver = "1"
+toml = "1"
+url = "2.5"
+blake3 = "1.8"
+tracing = "0.1"
+clap = { version = "4.6", features = ["derive"] }
+tempfile = "3"
+similar = "3"
+insta = { version = "1.48", features = ["json", "redactions"] }
+
+# The viewer's WebAssembly evaluator: small binary over fast compile.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -1,0 +1,28 @@
+---
+source: crates/glpv-cli/tests/snapshots.rs
+expression: "glpv_render::render_dot(&output.graph)"
+---
+digraph glpv {
+  rankdir=LR;
+  compound=true;
+  newrank=true;
+  graph [fontname="Helvetica"];
+  node [shape=box style="rounded,filled" fillcolor="#f6f8fa" fontname="Helvetica" fontsize=10];
+  edge [fontname="Helvetica" fontsize=9];
+
+  subgraph "cluster_p_cbe95be259861ccd" {
+    label="fixtures.local/fx/legacy @ master — .gitlab-ci.yml";
+    style="rounded,filled"; fillcolor="#ffffff"; color="#8250df"; fontsize=11;
+    subgraph "cluster_p_cbe95be259861ccd_s1" {
+      label="build"; rank=same; style=dashed; color="#d0d7de"; fontsize=10;
+      "p-cbe95be259861ccd/compile" [label="compile" fillcolor="#fff8c5" tooltip="stage: build"];
+    }
+    subgraph "cluster_p_cbe95be259861ccd_s2" {
+      label="deploy"; rank=same; style=dashed; color="#d0d7de"; fontsize=10;
+      "p-cbe95be259861ccd/release" [label="release" peripheries=2 tooltip="stage: deploy"];
+      "p-cbe95be259861ccd/old-style" [label="old-style" fillcolor="#fff8c5" tooltip="stage: deploy"];
+    }
+    "p-cbe95be259861ccd/compile" -> "p-cbe95be259861ccd/release" [style=invis weight=100];
+  }
+
+}

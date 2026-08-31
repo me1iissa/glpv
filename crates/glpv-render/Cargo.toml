@@ -1,0 +1,11 @@
+[package]
+name = "glpv-render"
+description = "Renderers for glpv pipeline graphs: JSON, Graphviz DOT, Mermaid, HTML"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+glpv-core = { path = "../glpv-core" }
+serde_json = { workspace = true }

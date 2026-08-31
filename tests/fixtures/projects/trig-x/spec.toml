@@ -1,0 +1,72 @@
+# Trigger edge cases: child depth-3 violation, >3 child config files,
+# string-form trigger, needs:project artifact edge, include cycle.
+
+dir = "tx"
+remote = "git@fixtures.local:fx/trig-x.git"
+default_branch = "main"
+
+[[commits]]
+message = "trigger edge cases"
+
+[commits.files]
+".gitlab-ci.yml" = '''
+include:
+  - local: inc-a.yml
+
+stages: [a]
+
+gen:
+  stage: a
+  script: [make]
+  needs:
+    - project: fx/trig-y
+      job: build
+      ref: main
+      artifacts: true
+
+too-many:
+  stage: a
+  trigger:
+    include:
+      - local: children/c1.yml
+      - local: children/c1.yml
+      - local: children/c1.yml
+      - local: children/c1.yml
+
+deep:
+  stage: a
+  trigger:
+    include: children/c1.yml
+
+string-trig:
+  stage: a
+  trigger: fx/trig-y
+'''
+"inc-a.yml" = '''
+include:
+  - local: inc-b.yml
+.from-a:
+  script: [a]
+'''
+"inc-b.yml" = '''
+include:
+  - local: inc-a.yml
+.from-b:
+  script: [b]
+'''
+"children/c1.yml" = '''
+c1-job:
+  script: [one]
+go-deeper:
+  trigger:
+    include:
+      - local: children/c2.yml
+'''
+"children/c2.yml" = '''
+c2-job:
+  script: [two]
+too-deep:
+  trigger:
+    include:
+      - local: children/c1.yml
+'''

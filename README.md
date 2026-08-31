@@ -1,0 +1,97 @@
+# glpv — GitLab end-to-end pipeline crawler & viewer
+
+`glpv` statically crawls a GitLab CI configuration — every `include`
+(local / project / template / component / remote) and every `trigger`
+(multi-project and parent-child) — across a folder of locally cloned
+projects, and renders the whole flow as one graph: pipelines → stages →
+jobs, `needs` edges, trigger edges, include provenance, and conditional
+routes. Everything unresolvable (variables in include paths, dynamic child
+pipelines, missing clones) stays visible as a first-class node with a reason.
+
+GitLab itself only draws downstream pipelines *after* they have run, and its
+Pipeline Editor never follows `trigger` (gitlab-org/gitlab#356817, #217780,
+#241722 — open since 2016–2022). No existing tool does the cross-project part
+statically; see the prior-art notes in `docs/`.
+
+## Status
+
+Progress against the six-milestone plan:
+
+- [x] **M1** — span-preserving YAML layer with Psych (Ruby) semantics,
+  single-project resolution (`include:local` + globs, `extends`,
+  `!reference`, `default:`, parallel/matrix, needs validation, static rules
+  summary), reading any git ref without checkout, JSON / DOT / Mermaid
+  output. `glpv resolve` verified byte-for-byte (structurally) against
+  GitLab 18.9's server-side `merged_yaml` for real projects.
+- [x] **M2** — project index over a clones folder keyed by git remotes,
+  `include:project` / `template` / `component` with full context switching,
+  `glpv index`, `glpv.toml` overrides.
+- [x] **M3 (trigger walk)** — `trigger:` crawling: parent-child children and
+  grandchildren (depth cap 2), multi-project chains with a visited set and
+  cycle back-edges, dynamic children and unresolved variables as first-class
+  nodes; project borders in the DOT and Mermaid output (`combined.mmd`).
+  See `demo/` for a five-project playground.
+- [x] **M3 (viewer)** — self-contained interactive `index.html` per scan:
+  project lanes → pipeline cards → stage columns → job pills, SVG needs/
+  trigger edges (dotted when rule-gated, labelled with the gating condition),
+  pan/zoom, click-through to rule traces, provenance (file:line opens the
+  embedded source) and effective YAML.
+- [x] **M4 (rules engine)** — GitLab-faithful `rules:if` evaluator (Ruby value
+  semantics, RE2 regexes, three-valued with `unknown`), `workflow:rules`
+  gating, legacy only/except refs, per-job traces in the graph JSON — and a
+  JS mirror in the viewer for **live simulation**: change the pipeline
+  source, ref/tag or any variable and the whole graph re-evaluates
+  (downstream pipelines grey out when their trigger stops firing).
+- [ ] M4 (rest) — `rules:changes` via simulated diffs, richer scenario sets.
+- [ ] M5 — GitLab API source + `glpv check` oracle diffing.
+- [ ] M6 — `serve --watch`, optional ELK layout, docs.
+
+## Usage
+
+```console
+$ glpv scan --file path/to/.gitlab-ci.yml -o out/
+wrote out/graph.json      # canonical graph (schema_version 1)
+wrote out/graph.dot       # Graphviz: dot -Tsvg out/graph.dot > graph.svg
+wrote out/mermaid/        # one flowchart per pipeline + overview.mmd
+
+$ glpv scan --file .gitlab-ci.yml --ref main   # a commit instead of the worktree
+$ glpv resolve --file .gitlab-ci.yml           # fully merged config, like
+                                               # `glab ci config compile` but offline
+
+# Cross-project: index a folder of clones and crawl includes + triggers.
+$ glpv index --projects ~/projects
+$ glpv scan --projects ~/projects --entry acme/api -o out/
+$ glpv scan --projects ~/projects --all -o out/   # every project as a root, plus
+                                                    # discovery of CI-looking *.yml
+                                                    # nothing references (detached)
+
+# The multi-project demo (five interlinked repos):
+$ cargo run -p glpv-cli --example build_fixtures -- demo/projects target/glpv-demo
+$ glpv scan --projects target/glpv-demo --entry pipelines-demo/shop -o out/
+
+# The stress test: gitlab-org/gitlab itself (blobless shallow clones, ~30 MB total):
+$ scripts/fetch-gitlab-corpus.sh corpus/
+$ glpv scan --projects corpus --entry gitlab-org/gitlab -o out/
+58 pipeline(s), 3167 job(s), 57 trigger edge(s)   # 4 projects, 281 YAML files
+```
+
+## Development
+
+```console
+$ cargo test --workspace          # unit + fixture snapshot tests
+$ cargo clippy --workspace
+```
+
+The HTML viewer renders its board on the GPU (WebGL2 scene + canvas text
+overlay, with a Canvas2D fallback) and evaluates rules with the canonical
+Rust evaluator compiled to WebAssembly. `scripts/build-wasm.sh` rebuilds
+`ui/eval-wasm.b64` from `crates/glpv-wasm`; an empty file makes the viewer
+fall back to its mirrored JS evaluator.
+
+Fixture repositories are built deterministically from
+`tests/fixtures/projects/*/spec.toml` into `target/glpv-fixtures/`.
+The scalar-typing differential test against PyYAML runs automatically when
+`python3` with PyYAML is available.
+
+GitLab semantics implemented here are documented in `docs/semantics.md`,
+with sources.

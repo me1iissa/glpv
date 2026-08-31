@@ -1,0 +1,125 @@
+# The entry project: includes shared templates cross-project, runs a
+# parent-child deploy pipeline (with a grandchild), and fans out to infra,
+# analytics and a variable-named project that cannot be resolved statically.
+
+dir = "shop"
+remote = "git@gitlab.example.com:pipelines-demo/shop.git"
+default_branch = "main"
+
+[[commits]]
+message = "shop ci"
+
+[commits.files]
+".gitlab-ci.yml" = '''
+include:
+  - project: pipelines-demo/ci-templates
+    file: templates/rust.yml
+
+stages: [build, test, deploy]
+
+variables:
+  ANALYTICS_BRANCH: main
+
+build:
+  stage: build
+  extends: [.rust-base, .cargo-cache]
+  script:
+    - cargo build --release
+
+test:
+  stage: test
+  needs: [build]
+  script:
+    - cargo test
+
+deploy-review:
+  stage: deploy
+  needs: [test]
+  trigger:
+    include:
+      - local: ci/deploy-pipeline.yml
+    strategy: depend
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+provision-infra:
+  stage: deploy
+  needs: [test]
+  trigger:
+    project: pipelines-demo/infra
+    strategy: depend
+
+run-analytics:
+  stage: deploy
+  trigger:
+    project: pipelines-demo/analytics
+    branch: $ANALYTICS_BRANCH
+
+regional-stack:
+  stage: deploy
+  when: manual
+  trigger: pipelines-demo/$REGION-stack
+'''
+"ci/deploy-pipeline.yml" = '''
+stages: [deploy, verify]
+
+deploy-staging:
+  stage: deploy
+  script:
+    - ./deploy.sh staging
+
+verify-staging:
+  stage: verify
+  needs: [deploy-staging]
+  script:
+    - ./smoke.sh staging
+
+promote-prod:
+  stage: verify
+  when: manual
+  script:
+    - ./deploy.sh prod
+
+smoke-suite:
+  stage: verify
+  trigger:
+    include:
+      - local: ci/smoke-pipeline.yml
+'''
+"ci/smoke-pipeline.yml" = '''
+checkout-flow:
+  script:
+    - ./smoke.sh checkout
+
+payment-flow:
+  script:
+    - ./smoke.sh payment
+'''
+"ops/nightly-cleanup.yml" = '''
+# A standalone pipeline definition: nothing includes or triggers it. It is
+# run as a scheduled pipeline whose custom ci_config_path points here — the
+# discovery sweep (`glpv scan --all`) must surface it as a detached pipeline.
+stages: [cleanup]
+
+prune-registry:
+  stage: cleanup
+  script:
+    - ./registry-prune.sh --older-than 30d
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+
+vacuum-db:
+  stage: cleanup
+  when: manual
+  script:
+    - psql -c "VACUUM ANALYZE"
+'''
+"config/settings.yml" = '''
+# Not CI configuration — the discovery heuristic must skip this file.
+theme: dark
+retries: 3
+endpoints:
+  api: https://shop.example/api
+  cdn: https://cdn.shop.example
+'''
+"README.md" = "# pipelines-demo/shop\n"

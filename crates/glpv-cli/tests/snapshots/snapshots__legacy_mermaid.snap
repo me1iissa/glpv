@@ -1,0 +1,44 @@
+---
+source: crates/glpv-cli/tests/snapshots.rs
+expression: mermaid
+---
+### overview.mmd
+flowchart LR
+    subgraph prj0["fixtures.local/fx/legacy"]
+        direction TB
+        ov0["pipeline @ master (3 jobs)"]
+    end
+
+### combined.mmd
+flowchart LR
+    subgraph prj0["fixtures.local/fx/legacy"]
+        direction LR
+        subgraph prj0p0["pipeline @ master — .gitlab-ci.yml"]
+            direction LR
+            subgraph prj0p0s1["build"]
+                direction TB
+                n0(["compile"])
+            end
+            subgraph prj0p0s2["deploy"]
+                direction TB
+                n1["release"]
+                n2(["old-style"])
+            end
+        end
+    end
+
+### p-cbe95be259861ccd.mmd
+flowchart LR
+    %% fixtures.local/fx/legacy @ master — .gitlab-ci.yml
+    %% n0 = compile
+    %% n1 = release
+    %% n2 = old-style
+    subgraph s1["build"]
+        direction TB
+        n0(["compile"])
+    end
+    subgraph s2["deploy"]
+        direction TB
+        n1["release"]
+        n2(["old-style"])
+    end

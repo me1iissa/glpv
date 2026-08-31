@@ -1,0 +1,95 @@
+---
+source: crates/glpv-cli/tests/snapshots.rs
+expression: mermaid
+---
+### overview.mmd
+flowchart LR
+    subgraph prj0["fixtures.local/fx/app"]
+        direction TB
+        ov0["pipeline @ main (10 jobs)"]
+    end
+
+### combined.mmd
+flowchart LR
+    subgraph prj0["fixtures.local/fx/app"]
+        direction LR
+        subgraph prj0p0["pipeline @ main — .gitlab-ci.yml"]
+            direction LR
+            subgraph prj0p0s0[".pre"]
+                direction TB
+                n0["setup"]
+            end
+            subgraph prj0p0s2["build"]
+                direction TB
+                n1["build"]
+                n2["bad-needs"]
+            end
+            subgraph prj0p0s3["test"]
+                direction TB
+                n3["test-matrix: [linux, x64]"]
+                n4["test-matrix: [linux, arm64]"]
+                n5["test-count 1/2"]
+                n6["test-count 2/2"]
+            end
+            subgraph prj0p0s4["deploy"]
+                direction TB
+                n7[/"deploy"/]
+                n8["pages"]
+            end
+            subgraph prj0p0s5[".post"]
+                direction TB
+                n9["cleanup"]
+            end
+        end
+    end
+    n1 --> n3
+    n1 --> n4
+    n3 --> n5
+    n3 --> n6
+    n3 --> n7
+    n7 --> n2
+
+### p-0105459a4828afc1.mmd
+flowchart LR
+    %% fixtures.local/fx/app @ main — .gitlab-ci.yml
+    %% n0 = build
+    %% n1 = test-matrix: [linux, x64]
+    %% n2 = test-matrix: [linux, arm64]
+    %% n3 = test-count 1/2
+    %% n4 = test-count 2/2
+    %% n5 = setup
+    %% n6 = cleanup
+    %% n7 = deploy
+    %% n8 = bad-needs
+    %% n9 = pages
+    subgraph s0[".pre"]
+        direction TB
+        n5["setup"]
+    end
+    subgraph s2["build"]
+        direction TB
+        n0["build"]
+        n8["bad-needs"]
+    end
+    subgraph s3["test"]
+        direction TB
+        n1["test-matrix: [linux, x64]"]
+        n2["test-matrix: [linux, arm64]"]
+        n3["test-count 1/2"]
+        n4["test-count 2/2"]
+    end
+    subgraph s4["deploy"]
+        direction TB
+        n7[/"deploy"/]
+        n9["pages"]
+    end
+    subgraph s5[".post"]
+        direction TB
+        n6["cleanup"]
+    end
+    n0 --> n1
+    n0 --> n2
+    n1 --> n3
+    n1 --> n4
+    n1 --> n7
+    n7 --> n8

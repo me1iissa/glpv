@@ -1,0 +1,31 @@
+# Triggered by infra; its manual rollback triggers infra again — a legal
+# multi-project cycle that the crawler must draw as a back-edge, not follow.
+
+dir = "monitoring"
+remote = "git@gitlab.example.com:pipelines-demo/monitoring.git"
+default_branch = "main"
+
+[[commits]]
+message = "monitoring ci"
+
+[commits.files]
+".gitlab-ci.yml" = '''
+stages: [checks, respond]
+
+synthetic-checks:
+  stage: checks
+  script:
+    - ./probe.sh https://shop.example
+
+alert-rules:
+  stage: checks
+  script:
+    - promtool check rules alerts.yml
+
+rollback-infra:
+  stage: respond
+  when: manual
+  trigger:
+    project: pipelines-demo/infra
+'''
+"README.md" = "# pipelines-demo/monitoring\n"

@@ -1,0 +1,31 @@
+# Shared CI template library, consumed by shop and infra via include:project
+# and (as a component) by analytics. Tagged 1.0.0 so component pinning works.
+
+dir = "ci-templates"
+remote = "git@gitlab.example.com:pipelines-demo/ci-templates.git"
+default_branch = "main"
+
+[[commits]]
+message = "shared rust templates"
+tags = ["1.0.0", "v2"]
+
+[commits.files]
+"templates/rust.yml" = '''
+# Shared Rust CI building blocks. The nested include below resolves inside
+# ci-templates (frame context), not inside the including project.
+include:
+  - local: templates/cache.yml
+
+.rust-base:
+  image: rust:1.85-bookworm
+  before_script:
+    - cargo --version
+'''
+"templates/cache.yml" = '''
+.cargo-cache:
+  cache:
+    key: cargo
+    paths:
+      - .cargo/
+'''
+"README.md" = "# pipelines-demo/ci-templates\n"

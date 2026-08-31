@@ -1,0 +1,243 @@
+---
+source: crates/glpv-cli/tests/snapshots.rs
+expression: value
+---
+{
+  "schema_version": 1,
+  "generated_at": "[timestamp]",
+  "tool": {
+    "name": "glpv",
+    "version": "[version]",
+    "args": []
+  },
+  "scenarios": [
+    {
+      "id": "push@default",
+      "source": "push",
+      "git_ref": null,
+      "vars": {}
+    }
+  ],
+  "pipelines": [
+    {
+      "id": "p-cbe95be259861ccd",
+      "kind": "root",
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/legacy",
+        "path_lc": "fx/legacy"
+      },
+      "git_ref": "master",
+      "sha": "bd388db1a65e56a7c7adaed5b18118d44d0503eb",
+      "config_path": ".gitlab-ci.yml",
+      "default_branch": "master",
+      "entry_source": 0,
+      "stages": [
+        ".pre",
+        "build",
+        "deploy",
+        ".post"
+      ],
+      "jobs": [
+        {
+          "id": "p-cbe95be259861ccd/compile",
+          "name": "compile",
+          "stage": "build",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "legacy",
+            "rules": [
+              {
+                "span": {
+                  "file": 0,
+                  "start": [
+                    6,
+                    9
+                  ],
+                  "end": [
+                    6,
+                    19
+                  ]
+                },
+                "legacy": {
+                  "only": [
+                    "branches"
+                  ],
+                  "except": [
+                    "schedules"
+                  ]
+                }
+              }
+            ]
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                3,
+                1
+              ],
+              "end": [
+                3,
+                8
+              ]
+            }
+          },
+          "merged_yaml": "stage: build\nscript:\n  - make\nonly:\n  - branches\nexcept:\n  - schedules\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "runs",
+              "trace": [
+                {
+                  "index": 0,
+                  "result": "matched",
+                  "clause": "legacy only/except",
+                  "when": "on_success"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "p-cbe95be259861ccd/release",
+          "name": "release",
+          "stage": "deploy",
+          "needs": [],
+          "when": "manual",
+          "allow_failure": {
+            "exit_codes": [
+              42,
+              137
+            ]
+          },
+          "rules": {
+            "mode": "none"
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                9,
+                1
+              ],
+              "end": [
+                9,
+                8
+              ]
+            }
+          },
+          "merged_yaml": "stage: deploy\nwhen: manual\nscript:\n  - make release\nallow_failure:\n  exit_codes:\n    - 42\n    - 137\nneeds: []\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "manual"
+            }
+          ]
+        },
+        {
+          "id": "p-cbe95be259861ccd/old-style",
+          "name": "old-style",
+          "stage": "deploy",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "legacy",
+            "rules": [
+              {
+                "span": {
+                  "file": 0,
+                  "start": [
+                    21,
+                    5
+                  ],
+                  "end": [
+                    22,
+                    1
+                  ]
+                },
+                "legacy": {
+                  "only": {
+                    "refs": [
+                      "main",
+                      "/^release-.*$/"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                17,
+                1
+              ],
+              "end": [
+                17,
+                10
+              ]
+            }
+          },
+          "merged_yaml": "stage: deploy\nscript:\n  - ship\nonly:\n  refs:\n    - main\n    - /^release-.*$/\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "skipped",
+              "trace": [
+                {
+                  "index": 0,
+                  "result": "no_match",
+                  "clause": "legacy only/except",
+                  "when": "on_success"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "depth": 0,
+      "includes": [
+        0
+      ]
+    }
+  ],
+  "trigger_edges": [],
+  "include_files": [
+    {
+      "file": 0,
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/legacy",
+        "path_lc": "fx/legacy"
+      },
+      "sha": "bd388db1a65e56a7c7adaed5b18118d44d0503eb",
+      "path": ".gitlab-ci.yml",
+      "kind": "entry",
+      "location": ".gitlab-ci.yml"
+    }
+  ],
+  "include_edges": [],
+  "diagnostics": [],
+  "sources": [
+    {
+      "file": 0,
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/legacy",
+        "path_lc": "fx/legacy"
+      },
+      "sha": "bd388db1a65e56a7c7adaed5b18118d44d0503eb",
+      "path": ".gitlab-ci.yml",
+      "text": "stages: [build, deploy]\n\ncompile:\n  stage: build\n  script: [make]\n  only: [branches]\n  except: [schedules]\n\nrelease:\n  stage: deploy\n  when: manual\n  script: [make release]\n  allow_failure:\n    exit_codes: [42, 137]\n  needs: []\n\nold-style:\n  stage: deploy\n  script: [ship]\n  only:\n    refs: [main, /^release-.*$/]\n"
+    }
+  ]
+}

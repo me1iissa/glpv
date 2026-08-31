@@ -1,0 +1,16 @@
+[package]
+name = "glpv-wasm"
+description = "The canonical rules evaluator compiled to WebAssembly for the viewer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+glpv-core = { path = "../glpv-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+indexmap = { workspace = true }

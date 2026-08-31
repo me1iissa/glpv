@@ -1,0 +1,1080 @@
+---
+source: crates/glpv-cli/tests/snapshots.rs
+expression: value
+---
+{
+  "schema_version": 1,
+  "generated_at": "[timestamp]",
+  "tool": {
+    "name": "glpv",
+    "version": "[version]",
+    "args": []
+  },
+  "scenarios": [
+    {
+      "id": "push@default",
+      "source": "push",
+      "git_ref": null,
+      "vars": {}
+    }
+  ],
+  "pipelines": [
+    {
+      "id": "p-0105459a4828afc1",
+      "kind": "root",
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/app",
+        "path_lc": "fx/app"
+      },
+      "git_ref": "main",
+      "sha": "0a5985da32e74460818f183a156dbc9aca847ef0",
+      "config_path": ".gitlab-ci.yml",
+      "default_branch": "main",
+      "variables": {
+        "OCT": "15",
+        "BOOLY": "true",
+        "QUOTED": "no",
+        "DATE": "2024-01-01"
+      },
+      "entry_source": 0,
+      "stages": [
+        ".pre",
+        "prep",
+        "build",
+        "test",
+        "deploy",
+        ".post"
+      ],
+      "jobs": [
+        {
+          "id": "p-0105459a4828afc1/build",
+          "name": "build",
+          "stage": "build",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "none"
+          },
+          "image": "alpine:3.20",
+          "variables": {
+            "FROM_BASE": "1"
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 3,
+              "start": [
+                1,
+                1
+              ],
+              "end": [
+                1,
+                6
+              ]
+            },
+            "contributors": [
+              {
+                "kind": {
+                  "type": "extends",
+                  "name": ".base"
+                },
+                "span": {
+                  "file": 1,
+                  "start": [
+                    16,
+                    3
+                  ],
+                  "end": [
+                    21,
+                    1
+                  ]
+                }
+              },
+              {
+                "kind": {
+                  "type": "default"
+                },
+                "span": {
+                  "file": 0,
+                  "start": [
+                    10,
+                    3
+                  ],
+                  "end": [
+                    14,
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          "merged_yaml": "cache:\n  key: fixed\n  paths:\n    - .cache/\nretry: 1\nvariables:\n  FROM_BASE: \"1\"\nstage: build\nextends: .base\nscript:\n  - make rebuild\nimage: alpine:3.20\nbefore_script:\n  - echo default-before\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "runs"
+            }
+          ]
+        },
+        {
+          "id": "p-0105459a4828afc1/test-matrix: [linux, x64]",
+          "name": "test-matrix: [linux, x64]",
+          "base_name": "test-matrix",
+          "stage": "test",
+          "needs": [
+            {
+              "job": "build",
+              "artifacts": true,
+              "kind": "normal",
+              "span": {
+                "file": 4,
+                "start": [
+                  3,
+                  11
+                ],
+                "end": [
+                  3,
+                  16
+                ]
+              }
+            }
+          ],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "none"
+          },
+          "parallel": {
+            "matrix": [
+              {
+                "OS": [
+                  "linux"
+                ],
+                "ARCH": [
+                  "x64",
+                  "arm64"
+                ]
+              }
+            ]
+          },
+          "image": "alpine:3.20",
+          "provenance": {
+            "defined_at": {
+              "file": 4,
+              "start": [
+                1,
+                1
+              ],
+              "end": [
+                1,
+                12
+              ]
+            },
+            "contributors": [
+              {
+                "kind": {
+                  "type": "default"
+                },
+                "span": {
+                  "file": 0,
+                  "start": [
+                    10,
+                    3
+                  ],
+                  "end": [
+                    14,
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          "merged_yaml": "stage: test\nneeds:\n  - build\nparallel:\n  matrix:\n    - OS:\n        - linux\n      ARCH:\n        - x64\n        - arm64\nscript:\n  - make test\nimage: alpine:3.20\nbefore_script:\n  - echo default-before\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "runs"
+            }
+          ]
+        },
+        {
+          "id": "p-0105459a4828afc1/test-matrix: [linux, arm64]",
+          "name": "test-matrix: [linux, arm64]",
+          "base_name": "test-matrix",
+          "stage": "test",
+          "needs": [
+            {
+              "job": "build",
+              "artifacts": true,
+              "kind": "normal",
+              "span": {
+                "file": 4,
+                "start": [
+                  3,
+                  11
+                ],
+                "end": [
+                  3,
+                  16
+                ]
+              }
+            }
+          ],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "none"
+          },
+          "parallel": {
+            "matrix": [
+              {
+                "OS": [
+                  "linux"
+                ],
+                "ARCH": [
+                  "x64",
+                  "arm64"
+                ]
+              }
+            ]
+          },
+          "image": "alpine:3.20",
+          "provenance": {
+            "defined_at": {
+              "file": 4,
+              "start": [
+                1,
+                1
+              ],
+              "end": [
+                1,
+                12
+              ]
+            }
+          },
+          "merged_yaml": "",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "runs"
+            }
+          ]
+        },
+        {
+          "id": "p-0105459a4828afc1/test-count 1/2",
+          "name": "test-count 1/2",
+          "base_name": "test-count",
+          "stage": "test",
+          "needs": [
+            {
+              "job": "test-matrix: [linux, x64]",
+              "artifacts": true,
+              "kind": "normal",
+              "span": {
+                "file": 4,
+                "start": [
+                  15,
+                  7
+                ],
+                "end": [
+                  20,
+                  1
+                ]
+              }
+            }
+          ],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "none"
+          },
+          "parallel": {
+            "count": 2
+          },
+          "image": "alpine:3.20",
+          "provenance": {
+            "defined_at": {
+              "file": 4,
+              "start": [
+                10,
+                1
+              ],
+              "end": [
+                10,
+                11
+              ]
+            },
+            "contributors": [
+              {
+                "kind": {
+                  "type": "default"
+                },
+                "span": {
+                  "file": 0,
+                  "start": [
+                    10,
+                    3
+                  ],
+                  "end": [
+                    14,
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          "merged_yaml": "stage: test\nparallel: 2\nscript:\n  - make quick\nneeds:\n  - job: test-matrix\n    parallel:\n      matrix:\n        - OS:\n            - linux\n          ARCH:\n            - x64\nimage: alpine:3.20\nbefore_script:\n  - echo default-before\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "runs"
+            }
+          ]
+        },
+        {
+          "id": "p-0105459a4828afc1/test-count 2/2",
+          "name": "test-count 2/2",
+          "base_name": "test-count",
+          "stage": "test",
+          "needs": [
+            {
+              "job": "test-matrix: [linux, x64]",
+              "artifacts": true,
+              "kind": "normal",
+              "span": {
+                "file": 4,
+                "start": [
+                  15,
+                  7
+                ],
+                "end": [
+                  20,
+                  1
+                ]
+              }
+            }
+          ],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "none"
+          },
+          "parallel": {
+            "count": 2
+          },
+          "image": "alpine:3.20",
+          "provenance": {
+            "defined_at": {
+              "file": 4,
+              "start": [
+                10,
+                1
+              ],
+              "end": [
+                10,
+                11
+              ]
+            }
+          },
+          "merged_yaml": "",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "runs"
+            }
+          ]
+        },
+        {
+          "id": "p-0105459a4828afc1/setup",
+          "name": "setup",
+          "stage": ".pre",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "none"
+          },
+          "image": "alpine:3.20",
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                18,
+                1
+              ],
+              "end": [
+                18,
+                6
+              ]
+            },
+            "contributors": [
+              {
+                "kind": {
+                  "type": "default"
+                },
+                "span": {
+                  "file": 0,
+                  "start": [
+                    10,
+                    3
+                  ],
+                  "end": [
+                    14,
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          "merged_yaml": "stage: .pre\nscript:\n  - echo setup\nimage: alpine:3.20\nbefore_script:\n  - echo default-before\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "runs"
+            }
+          ]
+        },
+        {
+          "id": "p-0105459a4828afc1/cleanup",
+          "name": "cleanup",
+          "stage": ".post",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "none"
+          },
+          "image": "alpine:3.20",
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                22,
+                1
+              ],
+              "end": [
+                22,
+                8
+              ]
+            },
+            "contributors": [
+              {
+                "kind": {
+                  "type": "default"
+                },
+                "span": {
+                  "file": 0,
+                  "start": [
+                    10,
+                    3
+                  ],
+                  "end": [
+                    14,
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          "merged_yaml": "stage: .post\nscript:\n  - echo cleanup\nimage: alpine:3.20\nbefore_script:\n  - echo default-before\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "runs"
+            }
+          ]
+        },
+        {
+          "id": "p-0105459a4828afc1/deploy",
+          "name": "deploy",
+          "stage": "deploy",
+          "needs": [
+            {
+              "job": "test-matrix: [linux, x64]",
+              "artifacts": true,
+              "kind": "normal",
+              "span": {
+                "file": 0,
+                "start": [
+                  32,
+                  7
+                ],
+                "end": [
+                  33,
+                  5
+                ]
+              }
+            },
+            {
+              "job": "missing-job",
+              "optional": true,
+              "artifacts": true,
+              "kind": "normal",
+              "span": {
+                "file": 0,
+                "start": [
+                  33,
+                  7
+                ],
+                "end": [
+                  35,
+                  3
+                ]
+              }
+            }
+          ],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "manual",
+            "rules": [
+              {
+                "if": "$CI_COMMIT_TAG",
+                "when": "manual",
+                "span": {
+                  "file": 0,
+                  "start": [
+                    36,
+                    7
+                  ],
+                  "end": [
+                    39,
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          "image": "alpine:3.20",
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                26,
+                1
+              ],
+              "end": [
+                26,
+                7
+              ]
+            },
+            "contributors": [
+              {
+                "kind": {
+                  "type": "extends",
+                  "name": ".deployable"
+                },
+                "span": {
+                  "file": 1,
+                  "start": [
+                    22,
+                    3
+                  ],
+                  "end": [
+                    25,
+                    1
+                  ]
+                }
+              },
+              {
+                "kind": {
+                  "type": "reference",
+                  "name": ".scripts.deploy-steps"
+                },
+                "span": {
+                  "file": 0,
+                  "start": [
+                    30,
+                    18
+                  ],
+                  "end": [
+                    30,
+                    42
+                  ]
+                }
+              },
+              {
+                "kind": {
+                  "type": "default"
+                },
+                "span": {
+                  "file": 0,
+                  "start": [
+                    10,
+                    3
+                  ],
+                  "end": [
+                    14,
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          "merged_yaml": "cache:\n  key: fixed\n  paths:\n    - .cache/\nretry: 1\nextends: .deployable\ninterruptible: true\nstage: deploy\nscript:\n  - echo step-one\n  - echo step-two\nneeds:\n  - job: \"test-matrix: [linux, x64]\"\n  - job: missing-job\n    optional: true\nrules:\n  - if: $CI_COMMIT_TAG\n    when: manual\nimage: alpine:3.20\nbefore_script:\n  - echo default-before\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "skipped",
+              "trace": [
+                {
+                  "index": 0,
+                  "result": "no_match",
+                  "clause": "if: $CI_COMMIT_TAG",
+                  "when": "manual",
+                  "vars_used": [
+                    [
+                      "CI_COMMIT_TAG",
+                      "unset"
+                    ]
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "p-0105459a4828afc1/bad-needs",
+          "name": "bad-needs",
+          "stage": "build",
+          "needs": [
+            {
+              "job": "deploy",
+              "artifacts": true,
+              "kind": "normal",
+              "span": {
+                "file": 0,
+                "start": [
+                  42,
+                  11
+                ],
+                "end": [
+                  42,
+                  17
+                ]
+              }
+            }
+          ],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "none"
+          },
+          "image": "alpine:3.20",
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                39,
+                1
+              ],
+              "end": [
+                39,
+                10
+              ]
+            },
+            "contributors": [
+              {
+                "kind": {
+                  "type": "default"
+                },
+                "span": {
+                  "file": 0,
+                  "start": [
+                    10,
+                    3
+                  ],
+                  "end": [
+                    14,
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          "merged_yaml": "stage: build\nscript:\n  - echo x\nneeds:\n  - deploy\nimage: alpine:3.20\nbefore_script:\n  - echo default-before\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "runs"
+            }
+          ]
+        },
+        {
+          "id": "p-0105459a4828afc1/pages",
+          "name": "pages",
+          "stage": "deploy",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "none"
+          },
+          "is_pages": true,
+          "image": "alpine:3.20",
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                44,
+                1
+              ],
+              "end": [
+                44,
+                6
+              ]
+            },
+            "contributors": [
+              {
+                "kind": {
+                  "type": "default"
+                },
+                "span": {
+                  "file": 0,
+                  "start": [
+                    10,
+                    3
+                  ],
+                  "end": [
+                    14,
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          "merged_yaml": "stage: deploy\nscript:\n  - echo pages\nartifacts:\n  paths:\n    - public\nimage: alpine:3.20\nbefore_script:\n  - echo default-before\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "runs"
+            }
+          ]
+        }
+      ],
+      "workflow_rules": {
+        "mode": "conditional",
+        "rules": [
+          {
+            "if": "$CI_PIPELINE_SOURCE == \"merge_request_event\"",
+            "when": "never",
+            "span": {
+              "file": 0,
+              "start": [
+                3,
+                7
+              ],
+              "end": [
+                5,
+                5
+              ]
+            }
+          },
+          {
+            "when": "always",
+            "span": {
+              "file": 0,
+              "start": [
+                5,
+                7
+              ],
+              "end": [
+                7,
+                1
+              ]
+            }
+          }
+        ]
+      },
+      "depth": 0,
+      "includes": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ]
+    }
+  ],
+  "trigger_edges": [],
+  "include_files": [
+    {
+      "file": 0,
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/app",
+        "path_lc": "fx/app"
+      },
+      "sha": "0a5985da32e74460818f183a156dbc9aca847ef0",
+      "path": ".gitlab-ci.yml",
+      "kind": "entry",
+      "location": ".gitlab-ci.yml"
+    },
+    {
+      "file": 1,
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/app",
+        "path_lc": "fx/app"
+      },
+      "sha": "0a5985da32e74460818f183a156dbc9aca847ef0",
+      "path": "ci/base.yml",
+      "kind": "local",
+      "location": "/ci/base.yml"
+    },
+    {
+      "file": 2,
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/app",
+        "path_lc": "fx/app"
+      },
+      "sha": "0a5985da32e74460818f183a156dbc9aca847ef0",
+      "path": "ci/shared/scripts.yml",
+      "kind": "local",
+      "location": "ci/shared/scripts.yml"
+    },
+    {
+      "file": 3,
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/app",
+        "path_lc": "fx/app"
+      },
+      "sha": "0a5985da32e74460818f183a156dbc9aca847ef0",
+      "path": "ci/jobs/build.yml",
+      "kind": "local",
+      "location": "ci/jobs/*.yml"
+    },
+    {
+      "file": 4,
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/app",
+        "path_lc": "fx/app"
+      },
+      "sha": "0a5985da32e74460818f183a156dbc9aca847ef0",
+      "path": "ci/jobs/test.yml",
+      "kind": "local",
+      "location": "ci/jobs/*.yml"
+    }
+  ],
+  "include_edges": [
+    {
+      "from": 0,
+      "to": 1,
+      "location": "/ci/base.yml",
+      "order": 0,
+      "span": {
+        "file": 0,
+        "start": [
+          15,
+          5
+        ],
+        "end": [
+          16,
+          3
+        ]
+      },
+      "pipeline": "p-0105459a4828afc1"
+    },
+    {
+      "from": 1,
+      "to": 2,
+      "location": "ci/shared/scripts.yml",
+      "order": 1,
+      "span": {
+        "file": 1,
+        "start": [
+          2,
+          5
+        ],
+        "end": [
+          4,
+          1
+        ]
+      },
+      "pipeline": "p-0105459a4828afc1"
+    },
+    {
+      "from": 0,
+      "to": 3,
+      "location": "ci/jobs/*.yml",
+      "order": 2,
+      "span": {
+        "file": 0,
+        "start": [
+          16,
+          5
+        ],
+        "end": [
+          16,
+          20
+        ]
+      },
+      "pipeline": "p-0105459a4828afc1"
+    },
+    {
+      "from": 0,
+      "to": 4,
+      "location": "ci/jobs/*.yml",
+      "order": 3,
+      "span": {
+        "file": 0,
+        "start": [
+          16,
+          5
+        ],
+        "end": [
+          16,
+          20
+        ]
+      },
+      "pipeline": "p-0105459a4828afc1"
+    }
+  ],
+  "diagnostics": [
+    {
+      "severity": "error",
+      "code": "yaml.disallowed-class",
+      "message": "`2024-01-01` parses as a date/time, which GitLab's YAML loader rejects; quote it to make it a string",
+      "span": {
+        "file": 1,
+        "start": [
+          8,
+          9
+        ],
+        "end": [
+          8,
+          19
+        ]
+      },
+      "pipeline": "p-0105459a4828afc1"
+    },
+    {
+      "severity": "warning",
+      "code": "yaml.duplicate-key",
+      "message": "duplicate key `script`: the later value wins",
+      "span": {
+        "file": 3,
+        "start": [
+          5,
+          3
+        ],
+        "end": [
+          5,
+          9
+        ]
+      },
+      "related": [
+        {
+          "file": 3,
+          "start": [
+            4,
+            3
+          ],
+          "end": [
+            4,
+            9
+          ]
+        }
+      ],
+      "pipeline": "p-0105459a4828afc1"
+    },
+    {
+      "severity": "error",
+      "code": "needs.later-stage",
+      "message": "`bad-needs` needs `deploy`, which is in a later stage; needs must point at the same or an earlier stage",
+      "span": {
+        "file": 0,
+        "start": [
+          42,
+          11
+        ],
+        "end": [
+          42,
+          17
+        ]
+      },
+      "pipeline": "p-0105459a4828afc1"
+    }
+  ],
+  "sources": [
+    {
+      "file": 0,
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/app",
+        "path_lc": "fx/app"
+      },
+      "sha": "0a5985da32e74460818f183a156dbc9aca847ef0",
+      "path": ".gitlab-ci.yml",
+      "text": "workflow:\n  rules:\n    - if: $CI_PIPELINE_SOURCE == \"merge_request_event\"\n      when: never\n    - when: always\n\nstages: [prep, build, test, deploy]\n\ndefault:\n  image: alpine:3.20\n  before_script:\n    - echo default-before\n\ninclude:\n  - local: /ci/base.yml\n  - \"ci/jobs/*.yml\"\n\nsetup:\n  stage: .pre\n  script: [echo setup]\n\ncleanup:\n  stage: .post\n  script: [echo cleanup]\n\ndeploy:\n  stage: deploy\n  extends: .deployable\n  script:\n    - !reference [.scripts, deploy-steps]\n  needs:\n    - job: \"test-matrix: [linux, x64]\"\n    - job: missing-job\n      optional: true\n  rules:\n    - if: $CI_COMMIT_TAG\n      when: manual\n\nbad-needs:\n  stage: build\n  script: [echo x]\n  needs: [deploy]\n\npages:\n  stage: deploy\n  script: [echo pages]\n  artifacts:\n    paths: [public]\n"
+    },
+    {
+      "file": 1,
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/app",
+        "path_lc": "fx/app"
+      },
+      "sha": "0a5985da32e74460818f183a156dbc9aca847ef0",
+      "path": "ci/base.yml",
+      "text": "include:\n  - local: ci/shared/scripts.yml\n\nvariables:\n  OCT: 017\n  BOOLY: on\n  QUOTED: \"no\"\n  DATE: 2024-01-01\n\n.cache-tpl: &cache\n  cache:\n    key: fixed\n    paths: [.cache/]\n\n.base:\n  <<: *cache\n  retry: 1\n  variables:\n    FROM_BASE: \"1\"\n\n.deployable:\n  extends: .base\n  interruptible: true\n  variables: null\n"
+    },
+    {
+      "file": 2,
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/app",
+        "path_lc": "fx/app"
+      },
+      "sha": "0a5985da32e74460818f183a156dbc9aca847ef0",
+      "path": "ci/shared/scripts.yml",
+      "text": ".scripts:\n  deploy-steps:\n    - echo step-one\n    - echo step-two\n"
+    },
+    {
+      "file": 3,
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/app",
+        "path_lc": "fx/app"
+      },
+      "sha": "0a5985da32e74460818f183a156dbc9aca847ef0",
+      "path": "ci/jobs/build.yml",
+      "text": "build:\n  stage: build\n  extends: .base\n  script: [make build]\n  script: [make rebuild]\n"
+    },
+    {
+      "file": 4,
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/app",
+        "path_lc": "fx/app"
+      },
+      "sha": "0a5985da32e74460818f183a156dbc9aca847ef0",
+      "path": "ci/jobs/test.yml",
+      "text": "test-matrix:\n  stage: test\n  needs: [build]\n  parallel:\n    matrix:\n      - OS: [linux]\n        ARCH: [x64, arm64]\n  script: [make test]\n\ntest-count:\n  stage: test\n  parallel: 2\n  script: [make quick]\n  needs:\n    - job: test-matrix\n      parallel:\n        matrix:\n          - OS: [linux]\n            ARCH: [x64]\n"
+    }
+  ]
+}

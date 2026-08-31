@@ -1,0 +1,124 @@
+# Fixture 1: local includes + globs, anchors/merge keys, default:, .pre/.post,
+# pages, Psych scalars, duplicate keys, extends chain + null removal, parallel
+# count + matrix, needs by expanded name / optional / later-stage error,
+# workflow:rules, !reference through an included file.
+
+# Clone dir deliberately differs from the project name.
+dir = "app-main"
+remote = "git@fixtures.local:fx/app.git"
+default_branch = "main"
+
+[[commits]]
+message = "ci setup"
+
+[commits.files]
+".gitlab-ci.yml" = '''
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: never
+    - when: always
+
+stages: [prep, build, test, deploy]
+
+default:
+  image: alpine:3.20
+  before_script:
+    - echo default-before
+
+include:
+  - local: /ci/base.yml
+  - "ci/jobs/*.yml"
+
+setup:
+  stage: .pre
+  script: [echo setup]
+
+cleanup:
+  stage: .post
+  script: [echo cleanup]
+
+deploy:
+  stage: deploy
+  extends: .deployable
+  script:
+    - !reference [.scripts, deploy-steps]
+  needs:
+    - job: "test-matrix: [linux, x64]"
+    - job: missing-job
+      optional: true
+  rules:
+    - if: $CI_COMMIT_TAG
+      when: manual
+
+bad-needs:
+  stage: build
+  script: [echo x]
+  needs: [deploy]
+
+pages:
+  stage: deploy
+  script: [echo pages]
+  artifacts:
+    paths: [public]
+'''
+"ci/base.yml" = '''
+include:
+  - local: ci/shared/scripts.yml
+
+variables:
+  OCT: 017
+  BOOLY: on
+  QUOTED: "no"
+  DATE: 2024-01-01
+
+.cache-tpl: &cache
+  cache:
+    key: fixed
+    paths: [.cache/]
+
+.base:
+  <<: *cache
+  retry: 1
+  variables:
+    FROM_BASE: "1"
+
+.deployable:
+  extends: .base
+  interruptible: true
+  variables: null
+'''
+"ci/shared/scripts.yml" = '''
+.scripts:
+  deploy-steps:
+    - echo step-one
+    - echo step-two
+'''
+"ci/jobs/build.yml" = '''
+build:
+  stage: build
+  extends: .base
+  script: [make build]
+  script: [make rebuild]
+'''
+"ci/jobs/test.yml" = '''
+test-matrix:
+  stage: test
+  needs: [build]
+  parallel:
+    matrix:
+      - OS: [linux]
+        ARCH: [x64, arm64]
+  script: [make test]
+
+test-count:
+  stage: test
+  parallel: 2
+  script: [make quick]
+  needs:
+    - job: test-matrix
+      parallel:
+        matrix:
+          - OS: [linux]
+            ARCH: [x64]
+'''

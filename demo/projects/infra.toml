@@ -1,0 +1,39 @@
+# Downstream of shop; shares the template library and triggers monitoring.
+
+dir = "infra"
+remote = "git@gitlab.example.com:pipelines-demo/infra.git"
+default_branch = "main"
+
+[[commits]]
+message = "infra ci"
+
+[commits.files]
+".gitlab-ci.yml" = '''
+include:
+  - project: pipelines-demo/ci-templates
+    ref: v2
+    file: templates/rust.yml
+
+stages: [plan, apply, observe]
+
+terraform-plan:
+  stage: plan
+  extends: .cargo-cache
+  script:
+    - terraform plan -out=plan.tfplan
+  artifacts:
+    paths: [plan.tfplan]
+
+terraform-apply:
+  stage: apply
+  needs: [terraform-plan]
+  when: manual
+  script:
+    - terraform apply plan.tfplan
+
+watch:
+  stage: observe
+  trigger:
+    project: pipelines-demo/monitoring
+'''
+"README.md" = "# pipelines-demo/infra\n"
