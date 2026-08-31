@@ -73,8 +73,8 @@ pub fn materialize(spec_path: &Path, root: &Path) -> PathBuf {
 fn build_into(clone_dir: &Path, spec: &toml::Table, default_branch: &str, hash: &str) {
     let remote = spec["remote"].as_str().expect("remote");
     git(clone_dir, &["init", "-q", "-b", default_branch]);
-    git(&clone_dir, &["config", "commit.gpgsign", "false"]);
-    git(&clone_dir, &["remote", "add", "origin", remote]);
+    git(clone_dir, &["config", "commit.gpgsign", "false"]);
+    git(clone_dir, &["remote", "add", "origin", remote]);
     // The marker must not become part of the fixture's tree.
     std::fs::write(clone_dir.join(".git/info/exclude"), ".glpv-spec-hash\n").unwrap();
 
@@ -82,7 +82,7 @@ fn build_into(clone_dir: &Path, spec: &toml::Table, default_branch: &str, hash: 
     for commit in commits {
         let commit = commit.as_table().unwrap();
         if let Some(checkout) = commit.get("checkout").and_then(|c| c.as_str()) {
-            git(&clone_dir, &["checkout", "-q", checkout]);
+            git(clone_dir, &["checkout", "-q", checkout]);
         }
         if let Some(files) = commit.get("files").and_then(|f| f.as_table()) {
             for (path, content) in files {
@@ -91,9 +91,9 @@ fn build_into(clone_dir: &Path, spec: &toml::Table, default_branch: &str, hash: 
                 std::fs::write(&full, content.as_str().expect("file content is a string")).unwrap();
             }
         }
-        git(&clone_dir, &["add", "-A"]);
+        git(clone_dir, &["add", "-A"]);
         git(
-            &clone_dir,
+            clone_dir,
             &[
                 "commit",
                 "-q",
@@ -106,14 +106,14 @@ fn build_into(clone_dir: &Path, spec: &toml::Table, default_branch: &str, hash: 
         );
         if let Some(tags) = commit.get("tags").and_then(|t| t.as_array()) {
             for tag in tags {
-                git(&clone_dir, &["tag", tag.as_str().unwrap()]);
+                git(clone_dir, &["tag", tag.as_str().unwrap()]);
             }
         }
         if let Some(branch) = commit.get("branch").and_then(|b| b.as_str()) {
-            git(&clone_dir, &["branch", "-f", branch]);
+            git(clone_dir, &["branch", "-f", branch]);
         }
     }
-    git(&clone_dir, &["checkout", "-q", default_branch]);
+    git(clone_dir, &["checkout", "-q", default_branch]);
 
     std::fs::write(clone_dir.join(".glpv-spec-hash"), hash).unwrap();
 }
