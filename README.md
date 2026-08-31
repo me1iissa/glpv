@@ -94,4 +94,4 @@ The scalar-typing differential test against PyYAML runs automatically when
 `python3` with PyYAML is available.
 
 GitLab semantics implemented here are documented in `docs/semantics.md`,
-with sources.
+with sources. Planned work lives in `docs/ROADMAP.md`.
