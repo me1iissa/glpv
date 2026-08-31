@@ -158,30 +158,21 @@ job:
     );
 }
 
-fn job_cache(r: &Node) -> &Node {
-    r.get("cargo-check").unwrap().get("cache").unwrap()
-}
-
+/// Opt-in smoke: point `GLPV_SPIKE_FILE` at any real `.gitlab-ci.yml` to
+/// check it parses without errors and round-trips through the emitter.
 #[test]
-fn real_world_vidchat_file_parses() {
-    let path = "/srv/projects/example/.gitlab-ci.yml";
+fn real_world_file_parses() {
+    let Ok(path) = std::env::var("GLPV_SPIKE_FILE") else {
+        return;
+    };
     if let Ok(text) = std::fs::read_to_string(path) {
         let (docs, diags) = parse(f(), &text).unwrap();
         let r = docs[0].root.as_ref().unwrap();
-        // `<<: *rust-cache` must give cargo-check a cache map whose span points
-        // back at the `.rust-cache:` anchor definition (lines 13-20).
-        let cache = job_cache(r);
-        assert!(
-            (13..=21).contains(&cache.span.start.line),
-            "span {:?}",
-            cache.span
-        );
         assert!(
             !diags
                 .iter()
                 .any(|d| matches!(d.severity, glpv_yaml::Severity::Error))
         );
-        // Round-trip the whole real file.
         let b = root(&emit_document(r));
         assert!(semantic_eq(r, &b));
     }
