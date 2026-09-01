@@ -14,7 +14,191 @@ Pipeline Editor never follows `trigger` (gitlab-org/gitlab#356817, #217780,
 statically; see the prior-art notes in `docs/`.
 
 Source and releases: <https://github.com/me1iissa/glpv> (static Linux and
-Windows binaries under Releases; `CHANGELOG.md` has the history).
+Windows binaries under Releases; `CHANGELOG.md` has the history, and
+versions follow [semantic versioning](docs/VERSIONING.md)).
+
+## What a scan produces
+
+**Live examples** — <https://me1iissa.github.io/glpv/>: the five-project demo
+below, and GitLab's own CI (gitlab-org/gitlab and its downstream projects,
+~3,000 jobs) scanned against a real diff. Each is one self-contained
+`index.html`.
+
+### The interactive map (`index.html`)
+
+[![the five-project demo in the viewer](docs/img/demo-map.png)](https://me1iissa.github.io/glpv/demo/)
+
+Project lanes, pipeline cards, stage columns and job pills; `needs` and
+trigger edges (dotted when rule-gated, labelled with the condition); a sim bar
+that re-evaluates every job as you change the pipeline source, ref, variables
+or changed files; a side panel with the rule trace, the invocation chain, "⚡
+Enable in simulation" and an outcome explorer; search (`/`), shareable links
+and a stack toggle for large fan-outs.
+
+### Mermaid (`mermaid/overview.mmd` and `combined.mmd`)
+
+Rendered by GitLab and GitHub straight from a markdown file — this is the
+demo's pipeline overview as emitted:
+
+```mermaid
+flowchart LR
+    subgraph prj0["gitlab.example.com/pipelines-demo/shop"]
+        direction TB
+        ov0["pipeline @ main (6 jobs)"]
+        ov1["child @ main (4 jobs)"]
+        ov2["child @ main (2 jobs)"]
+    end
+    subgraph prj1["gitlab.example.com/pipelines-demo/infra"]
+        direction TB
+        ov3["downstream @ main (3 jobs)"]
+    end
+    subgraph prj2["gitlab.example.com/pipelines-demo/monitoring"]
+        direction TB
+        ov4["downstream @ main (3 jobs)"]
+    end
+    subgraph prj3["gitlab.example.com/pipelines-demo/analytics"]
+        direction TB
+        ov5["downstream @ main (2 jobs)"]
+        ov6{{"child pipeline config is generated at runtime by `…"}}
+    end
+    subgraph prj4["gitlab.example.com/pipelines-demo/$REGION-stack"]
+        direction TB
+        ov7{{"cannot expand $REGION in trigger project `pipeline…"}}
+    end
+    ov0 -. "deploy-review: depend · if $CI_COMMIT_BRANCH == #quot;main#quot;" .-> ov1
+    ov1 == "smoke-suite" ==> ov2
+    ov0 == "provision-infra: depend" ==> ov3
+    ov3 == "watch" ==> ov4
+    ov4 -. "rollback-infra: manual (cycle)" .-> ov3
+    ov0 == "run-analytics" ==> ov5
+    ov5 == "run-report" ==> ov6
+    ov0 -. "regional-stack: manual" .-> ov7
+```
+
+<details>
+<summary>The job-level diagram (<code>combined.mmd</code>)</summary>
+
+```mermaid
+flowchart LR
+    subgraph prj0["gitlab.example.com/pipelines-demo/shop"]
+        direction LR
+        subgraph prj0p0["pipeline @ main — .gitlab-ci.yml"]
+            direction LR
+            subgraph prj0p0s1["build"]
+                direction TB
+                n0["build"]
+            end
+            subgraph prj0p0s2["test"]
+                direction TB
+                n1["test"]
+            end
+            subgraph prj0p0s3["deploy"]
+                direction TB
+                n2(["deploy-review"])
+                n3["provision-infra"]
+                n4["run-analytics"]
+                n5["regional-stack"]
+            end
+        end
+        subgraph prj0p1["child @ main — trigger:include via deploy-review"]
+            direction LR
+            subgraph prj0p1s1["deploy"]
+                direction TB
+                n6["deploy-staging"]
+            end
+            subgraph prj0p1s2["verify"]
+                direction TB
+                n7["verify-staging"]
+                n8["promote-prod"]
+                n9["smoke-suite"]
+            end
+        end
+        subgraph prj0p2["child @ main — trigger:include via smoke-suite"]
+            direction LR
+            subgraph prj0p2s2["test"]
+                direction TB
+                n10["checkout-flow"]
+                n11["payment-flow"]
+            end
+        end
+    end
+    subgraph prj1["gitlab.example.com/pipelines-demo/infra"]
+        direction LR
+        subgraph prj1p0["downstream @ main — .gitlab-ci.yml"]
+            direction LR
+            subgraph prj1p0s1["plan"]
+                direction TB
+                n12["terraform-plan"]
+            end
+            subgraph prj1p0s2["apply"]
+                direction TB
+                n13["terraform-apply"]
+            end
+            subgraph prj1p0s3["observe"]
+                direction TB
+                n14["watch"]
+            end
+        end
+    end
+    subgraph prj2["gitlab.example.com/pipelines-demo/monitoring"]
+        direction LR
+        subgraph prj2p0["downstream @ main — .gitlab-ci.yml"]
+            direction LR
+            subgraph prj2p0s1["checks"]
+                direction TB
+                n15["synthetic-checks"]
+                n16["alert-rules"]
+            end
+            subgraph prj2p0s2["respond"]
+                direction TB
+                n17["rollback-infra"]
+            end
+        end
+    end
+    subgraph prj3["gitlab.example.com/pipelines-demo/analytics"]
+        direction LR
+        subgraph prj3p0["downstream @ main — .gitlab-ci.yml"]
+            direction LR
+            subgraph prj3p0s1["ingest"]
+                direction TB
+                n18["generate-report-config"]
+            end
+            subgraph prj3p0s2["report"]
+                direction TB
+                n19["run-report"]
+            end
+        end
+        subgraph prj3p1["dynamic child @ main — #lt;generated by generate-report-config: report-config.yml#gt;"]
+            direction LR
+            n20{{"child pipeline config is generated at runtime by `generate-r…"}}
+        end
+    end
+    subgraph prj4["gitlab.example.com/pipelines-demo/$REGION-stack"]
+        direction LR
+        subgraph prj4p0["unresolved @ worktree — "]
+            direction LR
+            n21{{"cannot expand $REGION in trigger project `pipelines-demo/$RE…"}}
+        end
+    end
+    n0 --> n1
+    n1 --> n2
+    n1 --> n3
+    n6 --> n7
+    n12 --> n13
+    n2 -. "depend · if $CI_COMMIT_BRANCH == #quot;main#quot;" .-> prj0p1
+    n9 == "trigger" ==> prj0p2
+    n3 == "depend" ==> prj1p0
+    n14 == "trigger" ==> prj2p0
+    n17 -. "manual (cycle)" .-> prj1p0
+    n4 == "trigger" ==> prj3p0
+    n19 == "trigger" ==> prj3p1
+    n5 -. "manual" .-> prj4p0
+```
+
+</details>
+
+A Graphviz `graph.dot` and the full `graph.json` (every job, rule, trace and
+provenance span) are written alongside.
 
 ## Status
 
@@ -140,4 +324,6 @@ version fields are only ever added, always optional or defaulted (e.g.
 they do not know.
 
 GitLab semantics implemented here are documented in `docs/semantics.md`,
-with sources. Planned work lives in `docs/ROADMAP.md`.
+with sources. Planned work lives in `docs/ROADMAP.md`; the versioning and
+release rules in `docs/VERSIONING.md`. `node ui/test/shot-cli.mjs <index.html>
+<out.png>` renders a scan headlessly (the README screenshot is made that way).

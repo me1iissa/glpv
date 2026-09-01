@@ -51,3 +51,12 @@ protect_breaking_commits = true
 filter_commits = false
 tag_pattern = "^v[0-9]"
 sort_commits = "oldest"
+
+# Strict semantic versioning (https://semver.org): `git cliff --bumped-version`
+# derives the next tag from the commits since the last one — a breaking
+# change (`feat!:` / `BREAKING CHANGE:`) bumps MAJOR, a feature bumps MINOR,
+# anything else PATCH. While the major version is 0, breaking changes bump
+# MINOR (SemVer §4). The release jobs refuse a tag that disagrees.
+[bump]
+features_always_bump_minor = true
+breaking_always_bump_major = false
