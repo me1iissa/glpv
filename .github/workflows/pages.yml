@@ -6,6 +6,10 @@
 #   /demo/       the five-project demo (demo/projects)
 #   /gitlab-org/ gitlab-org/gitlab and its downstream projects, scanned with a
 #                real diff against master~1
+#
+# Deploy permissions live on the deploy job, not here: the build job renders
+# repository content and has no business holding pages: write or an OIDC
+# token while it does.
 name: pages
 
 on:
@@ -16,6 +20,7 @@ on:
       - "ui/**"
       - "demo/**"
       - "docs/pages/**"
+      - "docs/img/**"
       - "scripts/fetch-gitlab-corpus.sh"
       - ".github/workflows/pages.yml"
   schedule:
@@ -24,22 +29,27 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
+# Never cancel a deploy midway; queue instead.
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
+    name: Render the site
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - name: build glpv
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+      - name: Build glpv
         run: cargo build --release --locked -p glpv-cli
-      - name: demo
+      - name: Demo
         run: |
           cargo run -q --release -p glpv-cli --example build_fixtures -- demo/projects target/pages-demo
           ./target/release/glpv scan --projects target/pages-demo --entry pipelines-demo/shop \
@@ -49,23 +59,26 @@ jobs:
           scripts/fetch-gitlab-corpus.sh corpus
           ./target/release/glpv scan --projects corpus --entry gitlab-org/gitlab \
             --diff origin/master~1 -o site/gitlab-org --format html,json
-      - name: landing page
+      - name: Landing page
         run: |
           cp docs/pages/index.html site/index.html
           cp docs/img/demo-map.png docs/img/gitlab-org-map.png site/
           echo "built $(date -u +%Y-%m-%dT%H:%MZ) from $GITHUB_SHA" > site/build.txt
           du -sh site/*
-      - uses: actions/configure-pages@v6
-      - uses: actions/upload-pages-artifact@v5
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: site
 
   deploy:
+    name: Deploy
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      pages: write # publishes the rendered artifact to the Pages origin
+      id-token: write # OIDC token deploy-pages exchanges for the deployment
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

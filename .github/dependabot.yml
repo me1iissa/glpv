@@ -1,0 +1,21 @@
+# Dependabot keeps the hash-pinned actions in .github/workflows/ current: one
+# grouped PR a week at most, moving SHA pins with the version comment updated.
+# Pinning without an update mechanism rots; this is the mechanism.
+#
+# The GitHub repository is a mirror: its history is published from the
+# primary and never written on GitHub. A Dependabot PR is therefore never
+# merged here — its one-line pin bump is applied on the primary, arrives with
+# the next mirror push, and the PR is closed. A pin bump still executes
+# third-party code once applied; the diff has to be read, not just copied.
+#
+# `cargo` is deliberately absent: dependency updates go through `--locked`
+# builds and a release on the primary, not through PRs on the mirror.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
