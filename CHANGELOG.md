@@ -5,6 +5,13 @@ from the commit history; each tagged section is also the body of that
 version's GitHub Release.
 
 
+## [0.2.1] — 2026-09-01
+
+### CI and build
+
+- Quote the version-check echo so the publish job's script stays a list of strings
+
+
 ## [0.2.0] — 2026-09-01
 
 ### Features
