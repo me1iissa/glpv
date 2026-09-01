@@ -650,7 +650,7 @@ function clauseText(c) {
  * shape matches the Rust engine's JSON.
  */
 function evaluateRules(summary, vars, jobWhen, facts, atoms) {
-  if (summary.mode === "legacy") return evaluateLegacy(summary, jobWhen, facts);
+  if (summary.mode === "legacy") return evaluateLegacy(summary, vars, jobWhen, facts, atoms);
   if (!summary.rules || !summary.rules.length) {
     return { outcome: outcomeOfWhen(jobWhen), trace: [], variables: {} };
   }
@@ -717,11 +717,31 @@ function evaluateRules(summary, vars, jobWhen, facts, atoms) {
   return { outcome: decided === null ? "skipped" : decided, trace, variables: matchedVars };
 }
 
-/** Legacy `only`/`except`, refs lists only; anything richer is unknown. */
-function evaluateLegacy(summary, jobWhen, facts) {
-  const legacy = summary.rules && summary.rules[0] && summary.rules[0].legacy;
-  if (!legacy) return { outcome: "unknown", trace: [], variables: {} };
+const KUBERNETES_NOTE = "only/except:kubernetes depends on the project's cluster integration; undecidable";
+const LEGACY_UNSUPPORTED_NOTE = "only/except uses conditions beyond refs, variables, changes and kubernetes; undecidable";
+function orTri(a, b) {
+  if (a === "true" || b === "true") return "true";
+  if (a === "unknown" || b === "unknown") return "unknown";
+  return "false";
+}
 
+/**
+ * Legacy `only`/`except`: `refs` (or a bare list), `variables:` expressions,
+ * `changes:` globs and `kubernetes: active`. `only` includes the job when
+ * every key has a matching entry; `except` excludes it when any key has one.
+ * Anything else is undecidable.
+ */
+function evaluateLegacy(summary, vars, jobWhen, facts, atoms) {
+  const clause = summary.rules && summary.rules[0];
+  const legacy = clause && clause.legacy;
+  if (!legacy) return { outcome: "unknown", trace: [], variables: {} };
+  const notes = [], varsUsed = [];
+
+  const strings = (v) => {
+    if (Array.isArray(v)) return v.filter((x) => typeof x === "string");
+    if (typeof v === "string") return [v];
+    return null;
+  };
   const branchy = ["push", "web", "pipeline", "parent_pipeline", "trigger", "api", "schedule"];
   const matchesRef = (p) => {
     switch (p) {
@@ -746,43 +766,83 @@ function evaluateLegacy(summary, jobWhen, facts) {
         return p === facts.refName;
     }
   };
-  const listOf = (v, dflt) => {
-    if (v === undefined || v === null) return dflt;
-    if (Array.isArray(v)) return v.filter((x) => typeof x === "string");
-    if (typeof v === "object" && Object.keys(v).every((k) => k === "refs")) {
-      return v.refs === undefined ? [] : v.refs.filter((x) => typeof x === "string");
-    }
-    return null; // richer than refs → undecidable
-  };
-  const evalList = (list, dflt) => {
-    if (list === null) return null;
+  // an empty list means "no condition": the side's default
+  const anyRef = (list, dflt) => {
     if (!list.length) return dflt;
     let any = false;
     for (const p of list) {
       const m = matchesRef(p);
-      if (m === null) return null;
+      if (m === null) return "unknown";
       if (m) any = true;
     }
-    return any;
+    return any ? "true" : "false";
   };
-  const only = evalList(listOf(legacy.only, ["branches", "tags"]), true);
-  const except = evalList(listOf(legacy.except, []), false);
-  let outcome, note = null;
+  // one side → the tri of each of its keys, or null when unsupported
+  const side = (v, dflt) => {
+    const out = [];
+    if (v === undefined || v === null) {
+      if (dflt === "true") out.push(anyRef(["branches", "tags"], dflt));
+      return out;
+    }
+    if (Array.isArray(v) || typeof v === "string") {
+      const list = strings(v);
+      if (list === null) return null;
+      out.push(anyRef(list, dflt));
+      return out;
+    }
+    if (typeof v !== "object") return null;
+    for (const [k, val] of Object.entries(v)) {
+      if (k === "refs") {
+        const list = strings(val);
+        if (list === null) return null;
+        out.push(anyRef(list, dflt));
+      } else if (k === "variables") {
+        const list = strings(val);
+        if (list === null) return null;
+        let any = "false";
+        for (const e of list) {
+          const r = evalIf(e, vars);
+          for (const [n, st] of r.varsUsed) varsUsed.push([n, stateText(st)]);
+          notes.push(...r.notes);
+          any = orTri(any, r.result);
+        }
+        out.push(any);
+      } else if (k === "changes") {
+        const list = strings(val);
+        if (list === null) return null;
+        const checker = atoms && atoms.changes ? (q) => atoms.changes(q, clause, 0) : null;
+        const [t, n] = evalChanges(list, null, null, vars, !!facts.pushEvent, facts.source, checker);
+        if (n) notes.push(n);
+        out.push(t);
+      } else if (k === "kubernetes") {
+        notes.push(KUBERNETES_NOTE);
+        out.push("unknown");
+      } else return null;
+    }
+    return out;
+  };
+
+  const only = side(legacy.only, "true");
+  const except = side(legacy.except, "false");
+  let decided;
   if (only === null || except === null) {
-    outcome = "unknown";
-    note = "only/except uses conditions beyond refs; undecidable";
+    notes.push(LEGACY_UNSUPPORTED_NOTE);
+    decided = "unknown";
   } else {
-    outcome = only && !except ? outcomeOfWhen(jobWhen) : "skipped";
+    const o = only.reduce(andTri, "true");
+    const e = except.reduce(orTri, "false");
+    decided = andTri(o, notTri(e));
   }
+  const outcome = decided === "true" ? outcomeOfWhen(jobWhen) : decided === "false" ? "skipped" : "unknown";
   return {
     outcome,
     trace: [{
       index: 0,
-      result: outcome === "skipped" ? "no_match" : outcome === "unknown" ? "unknown" : "matched",
+      result: decided === "true" ? "matched" : decided === "false" ? "no_match" : "unknown",
       clause: "legacy only/except",
       when: jobWhen,
-      varsUsed: [],
-      note,
+      varsUsed,
+      note: notes.length ? notes.join("; ") : null,
     }],
     variables: {},
   };

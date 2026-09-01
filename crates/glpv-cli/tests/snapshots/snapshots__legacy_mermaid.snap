@@ -6,7 +6,7 @@ expression: mermaid
 flowchart LR
     subgraph prj0["fixtures.local/fx/legacy"]
         direction TB
-        ov0["pipeline @ master (3 jobs)"]
+        ov0["pipeline @ master (7 jobs)"]
     end
 
 ### combined.mmd
@@ -18,11 +18,15 @@ flowchart LR
             subgraph prj0p0s1["build"]
                 direction TB
                 n0(["compile"])
+                n1(["change-gated"])
             end
             subgraph prj0p0s2["deploy"]
                 direction TB
-                n1["release"]
-                n2(["old-style"])
+                n2["release"]
+                n3(["old-style"])
+                n4(["var-gated"])
+                n5(["var-except"])
+                n6(["k8s-only"])
             end
         end
     end
@@ -33,12 +37,20 @@ flowchart LR
     %% n0 = compile
     %% n1 = release
     %% n2 = old-style
+    %% n3 = var-gated
+    %% n4 = var-except
+    %% n5 = change-gated
+    %% n6 = k8s-only
     subgraph s1["build"]
         direction TB
         n0(["compile"])
+        n5(["change-gated"])
     end
     subgraph s2["deploy"]
         direction TB
         n1["release"]
         n2(["old-style"])
+        n3(["var-gated"])
+        n4(["var-except"])
+        n6(["k8s-only"])
     end

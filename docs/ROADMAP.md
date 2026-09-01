@@ -126,8 +126,8 @@ push (no changed-paths set, like a tag) has no scenario flag of its own.
 
 ## Smaller known gaps
 
-- Legacy `only:`/`except:` with conditions beyond refs (`variables:`,
-  `kubernetes`) evaluate to *unknown*.
+- Legacy `only:`/`except:` `kubernetes: active` is always *unknown* (it
+  depends on the project's cluster integration, which is not static).
 - Dynamic child pipelines remain opaque by design (their YAML does not exist
   until runtime); the card says exactly which job generates them.
 - Scenario finder sentinel: "any other value" assumes it does not match the

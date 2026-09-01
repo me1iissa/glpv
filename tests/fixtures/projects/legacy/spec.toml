@@ -31,4 +31,33 @@ old-style:
   script: [ship]
   only:
     refs: [main, /^release-.*$/]
+
+var-gated:
+  stage: deploy
+  script: [deploy]
+  only:
+    refs: [branches]
+    variables:
+      - $DEPLOY == "yes"
+      - $CI_COMMIT_BRANCH == "master" && $OTHER
+
+var-except:
+  stage: deploy
+  script: [ship-except]
+  except:
+    variables:
+      - $CI_COMMIT_BRANCH == "master"
+
+change-gated:
+  stage: build
+  script: [lint]
+  only:
+    changes:
+      - src/**/*
+
+k8s-only:
+  stage: deploy
+  script: [kubectl apply]
+  only:
+    kubernetes: active
 '''

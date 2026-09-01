@@ -28,7 +28,7 @@ expression: value
         "path_lc": "fx/legacy"
       },
       "git_ref": "master",
-      "sha": "bd388db1a65e56a7c7adaed5b18118d44d0503eb",
+      "sha": "b971d9a87d618ef89487a425a720b2b429896c8c",
       "config_path": ".gitlab-ci.yml",
       "default_branch": "master",
       "entry_source": 0,
@@ -159,7 +159,7 @@ expression: value
                     5
                   ],
                   "end": [
-                    22,
+                    23,
                     1
                   ]
                 },
@@ -202,6 +202,282 @@ expression: value
               ]
             }
           ]
+        },
+        {
+          "id": "p-cbe95be259861ccd/var-gated",
+          "name": "var-gated",
+          "stage": "deploy",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "legacy",
+            "rules": [
+              {
+                "span": {
+                  "file": 0,
+                  "start": [
+                    27,
+                    5
+                  ],
+                  "end": [
+                    32,
+                    1
+                  ]
+                },
+                "legacy": {
+                  "only": {
+                    "refs": [
+                      "branches"
+                    ],
+                    "variables": [
+                      "$DEPLOY == \"yes\"",
+                      "$CI_COMMIT_BRANCH == \"master\" && $OTHER"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                23,
+                1
+              ],
+              "end": [
+                23,
+                10
+              ]
+            }
+          },
+          "merged_yaml": "stage: deploy\nscript:\n  - deploy\nonly:\n  refs:\n    - branches\n  variables:\n    - $DEPLOY == \"yes\"\n    - $CI_COMMIT_BRANCH == \"master\" && $OTHER\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "unknown",
+              "trace": [
+                {
+                  "index": 0,
+                  "result": "unknown",
+                  "clause": "legacy only/except",
+                  "when": "on_success",
+                  "vars_used": [
+                    [
+                      "DEPLOY",
+                      "unknown"
+                    ],
+                    [
+                      "CI_COMMIT_BRANCH",
+                      "\"master\""
+                    ],
+                    [
+                      "OTHER",
+                      "unknown"
+                    ]
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "p-cbe95be259861ccd/var-except",
+          "name": "var-except",
+          "stage": "deploy",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "legacy",
+            "rules": [
+              {
+                "span": {
+                  "file": 0,
+                  "start": [
+                    36,
+                    5
+                  ],
+                  "end": [
+                    39,
+                    1
+                  ]
+                },
+                "legacy": {
+                  "except": {
+                    "variables": [
+                      "$CI_COMMIT_BRANCH == \"master\""
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                32,
+                1
+              ],
+              "end": [
+                32,
+                11
+              ]
+            }
+          },
+          "merged_yaml": "stage: deploy\nscript:\n  - ship-except\nexcept:\n  variables:\n    - $CI_COMMIT_BRANCH == \"master\"\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "skipped",
+              "trace": [
+                {
+                  "index": 0,
+                  "result": "no_match",
+                  "clause": "legacy only/except",
+                  "when": "on_success",
+                  "vars_used": [
+                    [
+                      "CI_COMMIT_BRANCH",
+                      "\"master\""
+                    ]
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "p-cbe95be259861ccd/change-gated",
+          "name": "change-gated",
+          "stage": "build",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "legacy",
+            "rules": [
+              {
+                "span": {
+                  "file": 0,
+                  "start": [
+                    43,
+                    5
+                  ],
+                  "end": [
+                    46,
+                    1
+                  ]
+                },
+                "legacy": {
+                  "only": {
+                    "changes": [
+                      "src/**/*"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                39,
+                1
+              ],
+              "end": [
+                39,
+                13
+              ]
+            }
+          },
+          "merged_yaml": "stage: build\nscript:\n  - lint\nonly:\n  changes:\n    - src/**/*\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "unknown",
+              "trace": [
+                {
+                  "index": 0,
+                  "result": "unknown",
+                  "clause": "legacy only/except",
+                  "when": "on_success",
+                  "note": "changes: depends on the diff; undecidable statically"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "p-cbe95be259861ccd/k8s-only",
+          "name": "k8s-only",
+          "stage": "deploy",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "legacy",
+            "rules": [
+              {
+                "span": {
+                  "file": 0,
+                  "start": [
+                    50,
+                    5
+                  ],
+                  "end": [
+                    51,
+                    1
+                  ]
+                },
+                "legacy": {
+                  "only": {
+                    "kubernetes": "active"
+                  }
+                }
+              }
+            ]
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                46,
+                1
+              ],
+              "end": [
+                46,
+                9
+              ]
+            }
+          },
+          "merged_yaml": "stage: deploy\nscript:\n  - kubectl apply\nonly:\n  kubernetes: active\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "unknown",
+              "trace": [
+                {
+                  "index": 0,
+                  "result": "unknown",
+                  "clause": "legacy only/except",
+                  "when": "on_success",
+                  "note": "only/except:kubernetes depends on the project's cluster integration; undecidable"
+                }
+              ]
+            }
+          ]
         }
       ],
       "depth": 0,
@@ -219,7 +495,7 @@ expression: value
         "path": "fx/legacy",
         "path_lc": "fx/legacy"
       },
-      "sha": "bd388db1a65e56a7c7adaed5b18118d44d0503eb",
+      "sha": "b971d9a87d618ef89487a425a720b2b429896c8c",
       "path": ".gitlab-ci.yml",
       "kind": "entry",
       "location": ".gitlab-ci.yml"
@@ -235,9 +511,9 @@ expression: value
         "path": "fx/legacy",
         "path_lc": "fx/legacy"
       },
-      "sha": "bd388db1a65e56a7c7adaed5b18118d44d0503eb",
+      "sha": "b971d9a87d618ef89487a425a720b2b429896c8c",
       "path": ".gitlab-ci.yml",
-      "text": "stages: [build, deploy]\n\ncompile:\n  stage: build\n  script: [make]\n  only: [branches]\n  except: [schedules]\n\nrelease:\n  stage: deploy\n  when: manual\n  script: [make release]\n  allow_failure:\n    exit_codes: [42, 137]\n  needs: []\n\nold-style:\n  stage: deploy\n  script: [ship]\n  only:\n    refs: [main, /^release-.*$/]\n"
+      "text": "stages: [build, deploy]\n\ncompile:\n  stage: build\n  script: [make]\n  only: [branches]\n  except: [schedules]\n\nrelease:\n  stage: deploy\n  when: manual\n  script: [make release]\n  allow_failure:\n    exit_codes: [42, 137]\n  needs: []\n\nold-style:\n  stage: deploy\n  script: [ship]\n  only:\n    refs: [main, /^release-.*$/]\n\nvar-gated:\n  stage: deploy\n  script: [deploy]\n  only:\n    refs: [branches]\n    variables:\n      - $DEPLOY == \"yes\"\n      - $CI_COMMIT_BRANCH == \"master\" && $OTHER\n\nvar-except:\n  stage: deploy\n  script: [ship-except]\n  except:\n    variables:\n      - $CI_COMMIT_BRANCH == \"master\"\n\nchange-gated:\n  stage: build\n  script: [lint]\n  only:\n    changes:\n      - src/**/*\n\nk8s-only:\n  stage: deploy\n  script: [kubectl apply]\n  only:\n    kubernetes: active\n"
     }
   ]
 }

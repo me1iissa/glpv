@@ -539,7 +539,31 @@ fn clause_text(clause: &crate::model::RuleClause) -> String {
     parts.join(" AND ")
 }
 
-/// Legacy `only`/`except`, refs lists only; anything richer is Unknown.
+fn or_tri(a: Tri, b: Tri) -> Tri {
+    match (a, b) {
+        (Tri::True, _) | (_, Tri::True) => Tri::True,
+        (Tri::Unknown, _) | (_, Tri::Unknown) => Tri::Unknown,
+        _ => Tri::False,
+    }
+}
+
+fn not_tri(t: Tri) -> Tri {
+    match t {
+        Tri::True => Tri::False,
+        Tri::False => Tri::True,
+        Tri::Unknown => Tri::Unknown,
+    }
+}
+
+const KUBERNETES_NOTE: &str =
+    "only/except:kubernetes depends on the project's cluster integration; undecidable";
+const LEGACY_UNSUPPORTED_NOTE: &str =
+    "only/except uses conditions beyond refs, variables, changes and kubernetes; undecidable";
+
+/// Legacy `only`/`except`: `refs` (or a bare list), `variables:` expressions,
+/// `changes:` globs and `kubernetes: active`. Per GitLab, `only` includes the
+/// job when every key has a matching entry; `except` excludes it when any key
+/// has one. Anything else is undecidable.
 fn evaluate_legacy(
     summary: &crate::model::RulesSummary,
     ctx: &EvalContext<'_>,
@@ -556,8 +580,10 @@ fn evaluate_legacy(
             blocked_by: None,
         };
     };
+    let mut notes: Vec<String> = Vec::new();
+    let mut vars_used: Vec<(String, String)> = Vec::new();
 
-    let refs_of = |v: &serde_json::Value| -> Option<Vec<String>> {
+    fn strings(v: &serde_json::Value) -> Option<Vec<String>> {
         match v {
             serde_json::Value::Array(items) => Some(
                 items
@@ -565,26 +591,7 @@ fn evaluate_legacy(
                     .filter_map(|i| i.as_str().map(|s| s.to_string()))
                     .collect(),
             ),
-            serde_json::Value::Object(map) => {
-                // refs-only maps are decidable; other keys are not.
-                if map.keys().all(|k| k == "refs") {
-                    refs_of_opt(map.get("refs"))
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    };
-    fn refs_of_opt(v: Option<&serde_json::Value>) -> Option<Vec<String>> {
-        match v {
-            None => Some(Vec::new()),
-            Some(serde_json::Value::Array(items)) => Some(
-                items
-                    .iter()
-                    .filter_map(|i| i.as_str().map(|s| s.to_string()))
-                    .collect(),
-            ),
+            serde_json::Value::String(s) => Some(vec![s.clone()]),
             _ => None,
         }
     }
@@ -624,44 +631,100 @@ fn evaluate_legacy(
             p => p == ctx.ref_name,
         })
     };
+    // An empty list means "no condition": the side's default.
+    let any_ref = |list: &[String], default: Tri| -> Tri {
+        if list.is_empty() {
+            return default;
+        }
+        let mut any = false;
+        for p in list {
+            match matches_ref(p) {
+                Some(true) => any = true,
+                Some(false) => {}
+                None => return Tri::Unknown,
+            }
+        }
+        any.into()
+    };
 
-    let evaluate_list = |list: Option<Vec<String>>, default: bool| -> Option<bool> {
-        match list {
-            None => None,
-            Some(l) if l.is_empty() => Some(default),
-            Some(l) => {
-                let mut any = false;
-                for p in &l {
-                    match matches_ref(p) {
-                        Some(true) => any = true,
-                        Some(false) => {}
-                        None => return None,
+    // One side (`only` or `except`) → the Tri of each of its keys, or None
+    // when a key or shape is not supported.
+    let mut side = |v: Option<&serde_json::Value>, default: Tri| -> Option<Vec<Tri>> {
+        let mut out = Vec::new();
+        match v {
+            None => {
+                if default == Tri::True {
+                    // A job with `only` unset defaults to only: [branches, tags].
+                    out.push(any_ref(
+                        &["branches".to_string(), "tags".to_string()],
+                        default,
+                    ));
+                }
+            }
+            Some(serde_json::Value::Array(_)) | Some(serde_json::Value::String(_)) => {
+                out.push(any_ref(&strings(v.unwrap())?, default));
+            }
+            Some(serde_json::Value::Object(map)) => {
+                for (k, val) in map {
+                    match k.as_str() {
+                        "refs" => out.push(any_ref(&strings(val)?, default)),
+                        "variables" => {
+                            let mut any = Tri::False;
+                            for e in strings(val)? {
+                                let r = expr::eval_if(&e, ctx.vars);
+                                vars_used.extend(
+                                    r.vars_used.iter().map(|(n, s)| (n.clone(), state_text(s))),
+                                );
+                                notes.extend(r.notes);
+                                any = or_tri(any, r.result);
+                            }
+                            out.push(any);
+                        }
+                        "changes" => {
+                            let (t, note) = eval_changes(
+                                &strings(val)?,
+                                None,
+                                None,
+                                ctx.vars,
+                                ctx.push_event,
+                                ctx.source,
+                                ctx.changes,
+                            );
+                            if let Some(n) = note {
+                                notes.push(n);
+                            }
+                            out.push(t);
+                        }
+                        "kubernetes" => {
+                            notes.push(KUBERNETES_NOTE.to_string());
+                            out.push(Tri::Unknown);
+                        }
+                        _ => return None,
                     }
                 }
-                Some(any)
             }
+            Some(_) => return None,
         }
+        Some(out)
     };
 
-    // A job with only/except unset defaults to only: [branches, tags].
-    let only = match &legacy.only {
-        Some(v) => refs_of(v),
-        None => Some(vec!["branches".to_string(), "tags".to_string()]),
-    };
-    let except = match &legacy.except {
-        Some(v) => refs_of(v),
-        None => Some(Vec::new()),
-    };
-
-    let outcome = match (evaluate_list(only, true), evaluate_list(except, false)) {
+    let only = side(legacy.only.as_ref(), Tri::True);
+    let except = side(legacy.except.as_ref(), Tri::False);
+    let decided = match (only, except) {
         (Some(o), Some(e)) => {
-            if o && !e {
-                outcome_of_when(job_when)
-            } else {
-                Outcome::Skipped
-            }
+            let o = o.into_iter().fold(Tri::True, and_tri);
+            let e = e.into_iter().fold(Tri::False, or_tri);
+            and_tri(o, not_tri(e))
         }
-        _ => Outcome::Unknown,
+        _ => {
+            notes.push(LEGACY_UNSUPPORTED_NOTE.to_string());
+            Tri::Unknown
+        }
+    };
+    let outcome = match decided {
+        Tri::True => outcome_of_when(job_when),
+        Tri::False => Outcome::Skipped,
+        Tri::Unknown => Outcome::Unknown,
     };
     JobEvaluation {
         scenario_id: scenario_id.to_string(),
@@ -669,16 +732,19 @@ fn evaluate_legacy(
         outcome,
         trace: vec![RuleTrace {
             index: 0,
-            result: match outcome {
-                Outcome::Skipped => "no_match".to_string(),
-                Outcome::Unknown => "unknown".to_string(),
-                _ => "matched".to_string(),
+            result: match decided {
+                Tri::True => "matched".to_string(),
+                Tri::False => "no_match".to_string(),
+                Tri::Unknown => "unknown".to_string(),
             },
             clause: "legacy only/except".to_string(),
             when: Some(job_when),
-            vars_used: Vec::new(),
-            note: matches!(outcome, Outcome::Unknown)
-                .then(|| "only/except uses conditions beyond refs; undecidable".to_string()),
+            vars_used,
+            note: if notes.is_empty() {
+                None
+            } else {
+                Some(notes.join("; "))
+            },
         }],
         blocked_by: None,
     }

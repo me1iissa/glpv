@@ -115,7 +115,15 @@ is not created.
   `parallel:matrix` subset.
 - Legacy `only`/`except`: a job with neither `rules` nor `only/except`
   implicitly has `only: [branches, tags]`; `rules` cannot be combined with
-  `only/except`.
+  `only/except`. Evaluated keys: `refs` (or a bare list of refs/keywords),
+  `variables` (the same expression language as `rules:if`), `changes` (the
+  same glob semantics and push-event rule as `rules:changes`) and
+  `kubernetes: active`, which depends on the project's cluster integration
+  and is always *unknown*. Per the documented combination rule
+  (https://docs.gitlab.com/ci/yaml/#only--except), `only` includes the job
+  when every key has a matching entry and `except` excludes it when any key
+  has one; both are three-valued here, so an undecidable key makes the job
+  *unknown* rather than skipped.
 - `when: manual` **outside** `rules` → `allow_failure: true` (optional,
   non-blocking); **inside** `rules` → `allow_failure: false` (blocking).
 
@@ -234,8 +242,9 @@ merge-request scenario stays *unknown* (GitLab always has a diff); a
 new-branch push is not simulated as such; the worktree diff counts
 untracked files, which a real push would only see once committed; a
 `compare_to` ref that does not resolve yields *unknown* plus
-`diff.compare-to-unresolved` where GitLab rejects the pipeline; legacy
-`only:changes`/`except:changes` stay *unknown*.
+`diff.compare-to-unresolved` where GitLab rejects the pipeline. Legacy
+`only:changes`/`except:changes` follow the same rules as `rules:changes`
+(without `compare_to`).
 
 ## `rules:if` expressions (M4)
 
