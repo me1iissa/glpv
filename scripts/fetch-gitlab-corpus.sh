@@ -7,7 +7,7 @@ dir="${1:-corpus}"
 mkdir -p "$dir" && cd "$dir"
 clone() { # <project-path> [dir]
   local p="$1" d="${2:-$(echo "$1" | tr '/' '-')}"
-  [ -d "$d" ] || git clone --filter=blob:none --depth 1 --no-checkout "https://gitlab.com/$p.git" "$d"
+  [ -d "$d" ] || git clone --filter=blob:none --depth 2 --no-checkout "https://gitlab.com/$p.git" "$d"
 }
 tags() { git -C "$1" fetch -q --depth 1 --filter=blob:none origin '+refs/tags/*:refs/tags/*'; }
 
