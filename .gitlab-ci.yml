@@ -60,10 +60,18 @@ samples:
     - cargo run -q -p glpv-cli --example build_fixtures -- demo/projects target/ui-test/demo
     - cargo run -q -p glpv-cli -- scan --projects target/ui-test/fixtures --all --changed-file src/main.rs --changed-file docs/sub/x.md -o target/ui-test/out-fixtures --format html,json
     - cargo run -q -p glpv-cli -- scan --projects target/ui-test/demo --entry pipelines-demo/shop -o target/ui-test/out-demo --format html,json
+    # a fresh wasm build of the evaluator: ui-test runs the parity suite
+    # against it too, so a stale committed ui/eval-wasm.b64 cannot hide drift
+    # between the Rust engine and its JS mirror
+    - rustup target add wasm32-unknown-unknown
+    - cargo build -q -p glpv-wasm --target wasm32-unknown-unknown --profile wasm-release
+    - base64 -w0 target/wasm32-unknown-unknown/wasm-release/glpv_wasm.wasm > target/ui-test/eval-wasm.fresh.b64
+    - 'echo "committed wasm: $(wc -c < ui/eval-wasm.b64) bytes; fresh build: $(wc -c < target/ui-test/eval-wasm.fresh.b64) bytes"'
   artifacts:
     paths:
       - target/ui-test/out-fixtures/
       - target/ui-test/out-demo/
+      - target/ui-test/eval-wasm.fresh.b64
     expire_in: 1 week
 
 ui-test:
@@ -82,6 +90,46 @@ ui-test:
   script:
     - npm ci
     - npm test
+    # the same parity suite against the evaluator built from source in `samples`
+    - GLPV_WASM_B64=target/ui-test/eval-wasm.fresh.b64 node --test ui/test/parity.test.mjs
+
+# ---------- corpus regression (scheduled / manual) ----------
+# Scans gitlab-org/gitlab and its downstream projects from fresh blobless
+# clones and asserts the shape the resolver is known to produce: any change in
+# the pipeline/job counts or in the honest unresolved nodes is a regression (or
+# upstream moved — check before adjusting the numbers).
+
+corpus:
+  extends: .rust
+  stage: test
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+      allow_failure: true
+  cache:
+    key: gitlab-corpus
+    paths:
+      - corpus/
+  script:
+    - scripts/fetch-gitlab-corpus.sh corpus
+    - cargo run -q --release -p glpv-cli -- scan --projects corpus --entry gitlab-org/gitlab --diff origin/master~1 -o corpus-out --format json | tee corpus-report.txt
+    - |
+      python3 - <<'PY'
+      import json
+      g = json.load(open("corpus-out/graph.json"))
+      jobs = sum(len(p["jobs"]) for p in g["pipelines"])
+      unresolved = sum(1 for p in g["pipelines"] if p.get("unresolved"))
+      print(f"pipelines={len(g['pipelines'])} jobs={jobs} unresolved={unresolved} trigger_edges={len(g['trigger_edges'])}")
+      assert 50 <= len(g["pipelines"]) <= 70, "pipeline count drifted"
+      assert 2800 <= jobs <= 3600, "job count drifted"
+      assert unresolved <= 12, "more unresolved nodes than the known honest set"
+      root = next(p for p in g["pipelines"] if p["kind"] == "root")
+      assert root.get("diff", {}).get("files"), "the diff was not applied to the root"
+      PY
+  artifacts:
+    paths: [corpus-report.txt]
+    expire_in: 1 month
 
 # ---------- release builds (tags vX.Y.Z) ----------
 # Binaries build only on version tags, after check + test pass, and are

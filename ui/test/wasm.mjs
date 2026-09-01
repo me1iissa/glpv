@@ -6,7 +6,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-export const B64_PATH = path.join(here, "..", "eval-wasm.b64");
+// GLPV_WASM_B64 points the parity suite at another build of the evaluator —
+// CI runs it against a fresh build from source as well as the committed file.
+export const B64_PATH = process.env.GLPV_WASM_B64
+  ? path.resolve(process.env.GLPV_WASM_B64)
+  : path.join(here, "..", "eval-wasm.b64");
 
 /** Instantiate the module over one graph (JSON text). */
 export async function loadEvaluator(graphJsonText) {
