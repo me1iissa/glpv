@@ -33,6 +33,7 @@ clap = { version = "4.6", features = ["derive"] }
 tempfile = "3"
 similar = "3"
 insta = { version = "1.48", features = ["json", "redactions"] }
+notify = "8"
 
 # The viewer's WebAssembly evaluator: small binary over fast compile.
 [profile.wasm-release]

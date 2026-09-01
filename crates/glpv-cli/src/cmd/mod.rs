@@ -2,6 +2,7 @@ pub mod check;
 pub mod index;
 pub mod resolve;
 pub mod scan;
+pub mod serve;
 
 use std::path::PathBuf;
 use std::sync::Arc;

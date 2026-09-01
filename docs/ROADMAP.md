@@ -94,11 +94,17 @@ push (no changed-paths set, like a tag) has no scenario flag of its own.
   gitlab clone, CI/CD catalog resolution for `~latest` and shorthand component
   versions, and `--clone-missing` to backfill local clones for offline reruns.
 
-## Phase E — `glpv serve --watch`
+## Phase E — `glpv serve --watch` (done)
 
-- Small local server: re-scan on file change, push a reload (SSE or
-  websocket) to the open viewer. Turns the report into a live companion while
-  editing CI YAML.
+- `glpv serve` takes every `scan` flag, writes the scan under `--out`, serves
+  it at `http://127.0.0.1:7070/` (`--bind`, `--port`) and watches the clone
+  roots — or the entry file's repository — with `notify`; after a quiet
+  period (`--debounce-ms`, 300 by default) it rescans, rewrites the output and
+  pushes `reload` to every open viewer over `/events` (server-sent events).
+  The served `index.html` carries a tiny reload script; `location.reload()`
+  keeps the URL hash, so the simulation, selection and camera survive an edit.
+  A failed rescan keeps serving the previous output and prints the error. The
+  server is standard-library only (a thread per connection).
 
 ## Phase F — public mirror (done)
 

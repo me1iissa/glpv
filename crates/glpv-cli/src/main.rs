@@ -26,6 +26,9 @@ enum Command {
     /// Compare the local resolution with the server's lint API (merged
     /// configuration and the jobs that would run); exit 1 on any difference.
     Check(cmd::check::CheckArgs),
+    /// Scan, serve the output over HTTP and rescan on every change, pushing a
+    /// reload to open viewers (their URL state survives).
+    Serve(cmd::serve::ServeArgs),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -35,5 +38,6 @@ fn main() -> anyhow::Result<()> {
         Command::Resolve(args) => cmd::resolve::run(args),
         Command::Index(args) => cmd::index::run(args),
         Command::Check(args) => cmd::check::run(args),
+        Command::Serve(args) => cmd::serve::run(args),
     }
 }

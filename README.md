@@ -246,7 +246,9 @@ Progress against the six-milestone plan:
   lint API; CI runs it against reference projects, a fresh wasm build and the
   gitlab-org corpus.
 - [ ] M5 (API source) — scan without clones through the GitLab REST API.
-- [ ] M6 — `serve --watch`, optional ELK layout, docs.
+- [x] M6 (serve) — `glpv serve`: rescan on change, reload pushed to open
+  viewers over server-sent events, URL state kept.
+- [ ] M6 (rest) — optional ELK layout, docs.
 
 ## Usage
 
@@ -281,6 +283,12 @@ $ glpv scan --projects target/glpv-demo --entry pipelines-demo/shop -o out/
 $ scripts/fetch-gitlab-corpus.sh corpus/
 $ glpv scan --projects corpus --entry gitlab-org/gitlab -o out/
 58 pipeline(s), 3167 job(s), 57 trigger edge(s)   # 4 projects, 281 YAML files
+# Live: serve the map and rescan on every change under the clones folder (or
+# the entry file's repository); open viewers reload and keep their URL state.
+$ glpv serve --projects ~/projects --entry acme/api
+serving glpv-out at http://127.0.0.1:7070/
+watching ~/projects
+
 # The oracle: compare the local resolution with the server (exit 1 on any
 # difference). `glab` must be logged in to the host, or use --api-transport
 # curl with GLPV_TOKEN.

@@ -58,6 +58,14 @@ pub struct ScanArgs {
 }
 
 pub fn run(args: ScanArgs) -> anyhow::Result<()> {
+    let (scenario, opts) = build_opts(&args)?;
+    let tool_args: Vec<String> = std::env::args().skip(1).collect();
+    let output = run_scan(&args, &scenario, &opts, tool_args)?;
+    write_outputs(&args, &output, &opts)
+}
+
+/// The scenario and resolver options a scan's flags describe.
+pub fn build_opts(args: &ScanArgs) -> anyhow::Result<(glpv_core::vars::Scenario, ResolveOpts)> {
     let scenario = args.scenario.to_scenario()?;
     let diff = match (&args.diff, args.changed_files.is_empty()) {
         (Some(base), _) => Some(DiffSpec::Base(base.clone())),
@@ -72,8 +80,15 @@ pub fn run(args: ScanArgs) -> anyhow::Result<()> {
         diff,
         ..ResolveOpts::default()
     };
-    let tool_args: Vec<String> = std::env::args().skip(1).collect();
-    let output = run_scan(&args, &scenario, &opts, tool_args)?;
+    Ok((scenario, opts))
+}
+
+/// Write the requested formats under `--out` and print the summary.
+pub fn write_outputs(
+    args: &ScanArgs,
+    output: &ScanOutput,
+    opts: &ResolveOpts,
+) -> anyhow::Result<()> {
     let graph = &output.graph;
 
     std::fs::create_dir_all(&args.out)
