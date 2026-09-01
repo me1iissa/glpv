@@ -13,6 +13,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.88"
+repository = "https://github.com/me1iissa/glpv"
 
 [workspace.dependencies]
 saphyr-parser = "=0.0.12"

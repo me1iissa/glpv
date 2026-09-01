@@ -13,6 +13,9 @@ Pipeline Editor never follows `trigger` (gitlab-org/gitlab#356817, #217780,
 #241722 — open since 2016–2022). No existing tool does the cross-project part
 statically; see the prior-art notes in `docs/`.
 
+Source and releases: <https://github.com/me1iissa/glpv> (static Linux and
+Windows binaries under Releases; `CHANGELOG.md` has the history).
+
 ## Status
 
 Progress against the six-milestone plan:

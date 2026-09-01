@@ -4,6 +4,7 @@ description = "The canonical rules evaluator compiled to WebAssembly for the vie
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+repository.workspace = true
 license.workspace = true
 
 [lib]
