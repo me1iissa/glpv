@@ -5,7 +5,7 @@ from the commit history; each tagged section is also the body of that
 version's GitHub Release.
 
 
-## [Unreleased]
+## [0.2.0] — 2026-09-01
 
 ### Features
 
@@ -18,14 +18,23 @@ version's GitHub Release.
 ### Bug fixes
 
 - **rules:** Non-ASCII lexer panic, stricter regex literals; JSON-driven expression cases
+- Clone the gitlab corpus at depth 2 so --diff origin/master~1 resolves
 
 ### Documentation
 
 - Rules:changes semantics, usage and roadmap
+- Strict semantic versioning policy; README examples; GitHub Pages landing page
 
 ### Testing
 
 - JS/wasm evaluator parity and a jsdom viewer harness; ci: samples + ui-test jobs
+
+### CI and build
+
+- Build, docs: public mirror metadata; GitHub release workflow and changelog
+- Release workflow tolerates tags that predate the viewer tests and cliff.toml
+- Enforce the git-cliff version in both release pipelines; GitHub Pages site
+- Check the implied version with the git-cliff binary on GitHub too
 
 
 ## [0.1.0] — 2026-08-31
