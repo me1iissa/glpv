@@ -5,6 +5,18 @@ from the commit history; each tagged section is also the body of that
 version's GitHub Release.
 
 
+## [0.4.0] — 2026-09-01
+
+### Features
+
+- **check:** --pipeline, the token-free oracle for CI
+
+### CI and build
+
+- Harden the GitHub workflows — least privilege, SHA pins, attestations
+- Swatinem/rust-cache v2.9.1 -> v2.9.2
+
+
 ## [0.3.0] — 2026-09-01
 
 ### Features
