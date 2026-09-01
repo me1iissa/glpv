@@ -1,14 +1,31 @@
 /* glpv interactive viewer.
  *
  * Reads the embedded graph JSON, lays the pipelines out as project lanes →
- * pipeline cards → stage columns → job pills, draws needs/trigger edges as an
- * SVG overlay, and re-evaluates every job's rules live as the user changes
- * the simulated pipeline source, ref and variables.
+ * pipeline cards → stage columns → job pills, draws needs/trigger edges on a
+ * WebGL2 (or Canvas2D) board, and re-evaluates every job's rules live as the
+ * user changes the simulated pipeline source, ref and variables.
  *
- * The rules evaluator here is a faithful port of glpv-core/src/rules/
- * (Ruby value semantics, three-valued with `unknown`).
+ * The rules evaluator lives in eval.js (embedded ahead of this file in the
+ * same script scope): the canonical Rust engine compiled to WebAssembly is
+ * used when available, the JS mirror otherwise.
  */
 "use strict";
+
+// Errors are collected for headless smoke tests (window.__glpv.errors).
+const __glpvErrors = [];
+addEventListener("error", (e) => {
+  __glpvErrors.push(String((e.error && e.error.stack) || e.message || e));
+});
+addEventListener("unhandledrejection", (e) => {
+  __glpvErrors.push("unhandledrejection: " + String(e.reason));
+});
+{
+  const orig = console.error;
+  console.error = (...a) => {
+    __glpvErrors.push(a.map(String).join(" "));
+    orig.apply(console, a);
+  };
+}
 
 const G = JSON.parse(document.getElementById("glpv-graph").textContent);
 
@@ -24,445 +41,17 @@ function truncate(s, n) {
   return s.length > n ? s.slice(0, n) + "…" : s;
 }
 
-const SOURCES = [
-  "push", "merge_request_event", "schedule", "web", "api", "trigger",
-  "pipeline", "parent_pipeline", "chat", "webide", "external",
-  "external_pull_request_event",
-];
+/* ================= simulation state ================= */
 
-/* ================= rules:if evaluator (port of expr.rs) ================= */
-
-const UNKNOWN = { t: "unknown" };
-const NIL = { t: "nil" };
-
-function lex(expr) {
-  const out = [];
-  let i = 0;
-  const err = (m) => { throw new Error(m); };
-  while (i < expr.length) {
-    const c = expr[i];
-    if (c === " " || c === "\t" || c === "\n" || c === "\r") { i++; continue; }
-    if (out.length > 100) err("too many tokens");
-    if (c === "(") { out.push({ k: "(" }); i++; continue; }
-    if (c === ")") { out.push({ k: ")" }); i++; continue; }
-    if (c === "$") {
-      let j = i + 1;
-      while (j < expr.length && /[A-Za-z0-9_]/.test(expr[j])) j++;
-      if (j === i + 1) err("$ with no name");
-      out.push({ k: "var", v: expr.slice(i + 1, j) });
-      i = j; continue;
-    }
-    if (c === '"' || c === "'") {
-      const end = expr.indexOf(c, i + 1);
-      if (end < 0) err("unterminated string");
-      out.push({ k: "str", v: expr.slice(i + 1, end) });
-      i = end + 1; continue;
-    }
-    if (c === "/") {
-      let j = i + 1, prevBs = false, close = -1;
-      while (j < expr.length) {
-        if (expr[j] === "/" && !prevBs) { close = j; break; }
-        prevBs = expr[j] === "\\" && !prevBs;
-        j++;
-      }
-      if (close < 0) err("unterminated regex");
-      let end = close + 1;
-      while (end < expr.length && /[ismU]/.test(expr[end])) end++;
-      out.push({ k: "re", v: expr.slice(i, end) });
-      i = end; continue;
-    }
-    if (c === "=") {
-      if (expr[i + 1] === "=") { out.push({ k: "==" }); i += 2; continue; }
-      if (expr[i + 1] === "~") { out.push({ k: "=~" }); i += 2; continue; }
-      err("stray =");
-    }
-    if (c === "!") {
-      if (expr[i + 1] === "=") { out.push({ k: "!=" }); i += 2; continue; }
-      if (expr[i + 1] === "~") { out.push({ k: "!~" }); i += 2; continue; }
-      out.push({ k: "!" }); i++; continue;
-    }
-    if (c === "&") {
-      if (expr[i + 1] === "&") { out.push({ k: "&&" }); i += 2; continue; }
-      err("stray &");
-    }
-    if (c === "|") {
-      if (expr[i + 1] === "|") { out.push({ k: "||" }); i += 2; continue; }
-      err("stray |");
-    }
-    if (expr.startsWith("null", i)) { out.push({ k: "null" }); i += 4; continue; }
-    if (expr.startsWith("true", i)) { out.push({ k: "bool", v: true }); i += 4; continue; }
-    if (expr.startsWith("false", i)) { out.push({ k: "bool", v: false }); i += 5; continue; }
-    err("unexpected character " + c);
-  }
-  return out;
-}
-
-const PREC = { "!": 1, "==": 10, "!=": 10, "=~": 10, "!~": 10, "&&": 11, "||": 12 };
-
-function toRpn(tokens) {
-  const out = [], ops = [];
-  for (const t of tokens) {
-    if (["var", "str", "re", "null", "bool"].includes(t.k)) out.push(t);
-    else if (t.k === "(") ops.push(t);
-    else if (t.k === ")") {
-      for (;;) {
-        const op = ops.pop();
-        if (!op) throw new Error("unbalanced parens");
-        if (op.k === "(") break;
-        out.push(op);
-      }
-    } else {
-      const p = PREC[t.k];
-      while (ops.length) {
-        const top = ops[ops.length - 1];
-        const tp = PREC[top.k];
-        if (tp === undefined) break;
-        if ((tp <= p && top.k !== "!") || tp < p) out.push(ops.pop());
-        else break;
-      }
-      ops.push(t);
-    }
-  }
-  while (ops.length) {
-    const op = ops.pop();
-    if (op.k === "(") throw new Error("unbalanced parens");
-    out.push(op);
-  }
-  if (!out.length) throw new Error("empty expression");
-  return out;
-}
-
-function rubyTruthy(v) {
-  if (v.t === "nil") return "false";
-  if (v.t === "bool") return v.v ? "true" : "false";
-  if (v.t === "unknown") return "unknown";
-  return "true"; // strings (even empty) and regexes are truthy in Ruby
-}
-function present(v) {
-  if (v.t === "nil") return "false";
-  if (v.t === "bool") return v.v ? "true" : "false";
-  if (v.t === "unknown") return "unknown";
-  if (v.t === "str") return /\S/.test(v.v) ? "true" : "false";
-  return "true";
-}
-function triVal(t) {
-  return t === "unknown" ? UNKNOWN : { t: "bool", v: t === "true" };
-}
-function notTri(t) {
-  return t === "unknown" ? "unknown" : t === "true" ? "false" : "true";
-}
-
-function compileRe(text, notes) {
-  const m = /^\/([\s\S]+)\/([ismU]*)$/.exec(text);
-  if (!m) return null;
-  let flags = "";
-  if (m[2].includes("i")) flags += "i";
-  if (m[2].includes("m")) flags += "m";
-  if (m[2].includes("s")) flags += "s";
-  if (m[2].includes("U")) notes.push("regex flag U (ungreedy) is approximated");
-  try {
-    return new RegExp(m[1].replace(/\\\//g, "/"), flags);
-  } catch (e) {
-    return null;
-  }
-}
-
-/** vars: Map name -> {k:'known',v}|{k:'unset'}|{k:'unknown'} */
-function evalIf(expr, vars) {
-  const notes = [], varsUsed = [];
-  let rpn;
-  try {
-    rpn = toRpn(lex(expr));
-  } catch (e) {
-    notes.push("expression does not parse (" + e.message + "); GitLab evaluates it as false");
-    return { result: "false", varsUsed, notes };
-  }
-  const st = [];
-  const pop = () => st.pop() || NIL;
-  for (const t of rpn) {
-    if (t.k === "var") {
-      const s = vars.get(t.v) || { k: "unknown" };
-      varsUsed.push([t.v, s]);
-      st.push(s.k === "known" ? { t: "str", v: s.v } : s.k === "unset" ? NIL : UNKNOWN);
-    } else if (t.k === "str") st.push({ t: "str", v: t.v });
-    else if (t.k === "re") st.push({ t: "re", v: t.v });
-    else if (t.k === "null") st.push(NIL);
-    else if (t.k === "bool") st.push({ t: "bool", v: t.v });
-    else if (t.k === "!") {
-      const r = rubyTruthy(pop());
-      st.push(triVal(notTri(r)));
-    } else if (t.k === "==" || t.k === "!=") {
-      const b = pop(), a = pop();
-      let r;
-      if (a.t === "unknown" || b.t === "unknown") r = "unknown";
-      else if (a.t === "str" && b.t === "str") r = a.v === b.v ? "true" : "false";
-      else if (a.t === "nil" && b.t === "nil") r = "true";
-      else if (a.t === "bool" && b.t === "bool") r = a.v === b.v ? "true" : "false";
-      else r = "false";
-      st.push(triVal(t.k === "!=" ? notTri(r) : r));
-    } else if (t.k === "=~" || t.k === "!~") {
-      const b = pop(), a = pop();
-      let r;
-      if (a.t === "unknown" || b.t === "unknown") r = "unknown";
-      else {
-        let pat = null;
-        if (b.t === "re") pat = b.v;
-        else if (b.t === "str" && b.v.startsWith("/")) pat = b.v;
-        if (pat === null) {
-          notes.push("right side of =~ is not a /regex/; treated as false");
-          r = "false";
-        } else {
-          const re = compileRe(pat, notes);
-          if (!re) { notes.push("invalid regex " + pat); r = "false"; }
-          else {
-            const text = a.t === "nil" ? "" : a.t === "str" ? a.v : null;
-            if (text === null) { notes.push("left side of =~ is not a string"); r = "false"; }
-            else r = re.test(text) ? "true" : "false";
-          }
-        }
-      }
-      st.push(triVal(t.k === "!~" ? notTri(r) : r));
-    } else if (t.k === "&&") {
-      const b = pop(), a = pop();
-      const ta = rubyTruthy(a);
-      st.push(ta === "false" ? a : ta === "true" ? b : UNKNOWN);
-    } else if (t.k === "||") {
-      const b = pop(), a = pop();
-      const ta = rubyTruthy(a);
-      st.push(ta === "true" ? a : ta === "false" ? b : UNKNOWN);
-    }
-  }
-  return { result: present(pop()), varsUsed, notes };
-}
-
-/* ================= rules evaluation (port of rules/mod.rs) ================= */
-
-function outcomeOfWhen(w) {
-  if (w === "never") return "skipped";
-  if (w === "manual") return "manual";
-  if (w === "delayed") return "delayed";
-  return "runs";
-}
-function andTri(a, b) {
-  if (a === "false" || b === "false") return "false";
-  if (a === "unknown" || b === "unknown") return "unknown";
-  return "true";
-}
-function stateText(s) {
-  return s.k === "known" ? '"' + s.v + '"' : s.k;
-}
-function clauseText(c) {
-  const parts = [];
-  if (c.if) parts.push("if: " + c.if);
-  if (c.changes) parts.push("changes: [" + c.changes.join(", ") + "]");
-  if (c.exists) parts.push("exists: [" + c.exists.join(", ") + "]");
-  return parts.length ? parts.join(" AND ") : "(always)";
-}
-
-function evaluateRules(summary, vars, jobWhen, facts, atoms) {
-  if (summary.mode === "legacy") return evaluateLegacy(summary, jobWhen, facts);
-  if (!summary.rules || !summary.rules.length) {
-    return { outcome: outcomeOfWhen(jobWhen), trace: [] };
-  }
-  const trace = [];
-  let decided = null;
-  for (let index = 0; index < summary.rules.length; index++) {
-    const clause = summary.rules[index];
-    if (decided !== null) {
-      trace.push({ index, result: "not_reached", clause: clauseText(clause), when: clause.when });
-      continue;
-    }
-    let result = "true", varsUsed = [], note = null;
-    const clauseOverride = atoms && atoms.clause ? atoms.clause(clause, index) : null;
-    if (clauseOverride === true || clauseOverride === false) {
-      result = clauseOverride ? "true" : "false";
-    } else {
-    if (clause.if) {
-      const r = evalIf(clause.if, vars);
-      varsUsed = r.varsUsed.map(([n, s]) => [n, stateText(s)]);
-      if (r.notes.length) note = r.notes.join("; ");
-      result = andTri(result, r.result);
-    }
-    if (clause.exists) {
-      const a = atoms && atoms.exists ? atoms.exists(clause, index) : null;
-      if (a === false) result = andTri(result, "false");
-      else if (a !== true) {
-        note = note || "exists: undecidable in the viewer";
-        result = andTri(result, "unknown");
-      }
-    }
-    if (clause.changes) {
-      const a = atoms && atoms.changes ? atoms.changes(clause, index) : null;
-      if (a === false) result = andTri(result, "false");
-      else if (a !== true) {
-        note = note || "changes: depends on the diff; undecidable statically";
-        result = andTri(result, "unknown");
-      }
-    }
-    }
-    const when = clause.when || jobWhen;
-    if (result === "true") decided = outcomeOfWhen(when);
-    else if (result === "unknown") decided = "unknown";
-    trace.push({
-      index,
-      result: result === "true" ? "matched" : result === "false" ? "no_match" : "unknown",
-      clause: clauseText(clause),
-      when,
-      varsUsed,
-      note,
-    });
-  }
-  return { outcome: decided === null ? "skipped" : decided, trace };
-}
-
-function evaluateLegacy(summary, jobWhen, facts) {
-  const legacy = summary.rules && summary.rules[0] && summary.rules[0].legacy;
-  const unknown = (note) => ({
-    outcome: "unknown",
-    trace: [{ index: 0, result: "unknown", clause: "legacy only/except", when: jobWhen, note }],
-  });
-  if (!legacy) return unknown();
-
-  const branchy = ["push", "web", "pipeline", "parent_pipeline", "trigger", "api", "schedule"];
-  const matchesRef = (p) => {
-    switch (p) {
-      case "branches": return !facts.isTag && branchy.includes(facts.source);
-      case "tags": return facts.isTag;
-      case "merge_requests": return facts.source === "merge_request_event";
-      case "schedules": return facts.source === "schedule";
-      case "web": return facts.source === "web";
-      case "api": return facts.source === "api";
-      case "triggers": return facts.source === "trigger";
-      case "pipelines": return facts.source === "pipeline";
-      case "pushes": return facts.source === "push";
-      case "external": return facts.source === "external";
-      case "chat": return facts.source === "chat";
-      default:
-        if (p.startsWith("/")) {
-          try { return new RegExp(p.replace(/^\/|\/$/g, "")).test(facts.refName); }
-          catch (e) { return null; }
-        }
-        return p === facts.refName;
-    }
-  };
-  const listOf = (v, dflt) => {
-    if (v === undefined || v === null) return dflt;
-    if (Array.isArray(v)) return v.filter((x) => typeof x === "string");
-    if (typeof v === "object" && Object.keys(v).every((k) => k === "refs")) {
-      return v.refs === undefined ? [] : v.refs.filter((x) => typeof x === "string");
-    }
-    return null; // richer than refs → undecidable
-  };
-  const evalList = (list, dflt) => {
-    if (list === null) return null;
-    if (!list.length) return dflt;
-    let any = false;
-    for (const p of list) {
-      const m = matchesRef(p);
-      if (m === null) return null;
-      if (m) any = true;
-    }
-    return any;
-  };
-  const only = evalList(listOf(legacy.only, ["branches", "tags"]), true);
-  const except = evalList(listOf(legacy.except, []), false);
-  if (only === null || except === null) {
-    return unknown("only/except uses conditions beyond refs; undecidable");
-  }
-  const outcome = only && !except ? outcomeOfWhen(jobWhen) : "skipped";
-  return {
-    outcome,
-    trace: [{
-      index: 0,
-      result: outcome === "skipped" ? "no_match" : "matched",
-      clause: "legacy only/except",
-      when: jobWhen,
-    }],
-  };
-}
-
-/* ================= variable tables ================= */
-
+const DEFAULT_SOURCE = (G.scenarios[0] && G.scenarios[0].source) || "push";
 const sim = {
-  source: (G.scenarios[0] && G.scenarios[0].source) || "push",
+  source: DEFAULT_SOURCE,
   ref: "",
   tag: false,
   vars: [], // [key, value]; the value "(unset)" simulates an unset variable
   assumeChanges: null, // simulation-wide rules:changes assumption
   assumeExists: null, // simulation-wide rules:exists assumption
 };
-function applySimVar(t, k, v) {
-  if (!k) return;
-  if (v === "(unset)") t.set(k, { k: "unset" });
-  else t.set(k, { k: "known", v: String(v) });
-}
-function simAtoms() {
-  return {
-    changes: () => sim.assumeChanges,
-    exists: () => sim.assumeExists,
-  };
-}
-
-function slugify(s) {
-  return s.toLowerCase().replace(/[^a-z0-9]/g, "-").slice(0, 63).replace(/^-+|-+$/g, "");
-}
-function refNameOf(p) {
-  if (p.kind === "root" || p.kind === "detached")
-    return sim.ref || p.git_ref || p.default_branch || "main";
-  return p.git_ref || p.default_branch || "main";
-}
-function sourceOf(p) {
-  if (p.kind === "root" || p.kind === "detached") return sim.source;
-  if (p.kind === "child" || p.kind === "dynamic_child") return "parent_pipeline";
-  return "pipeline";
-}
-function isTagOf(p) {
-  return p.kind === "root" || p.kind === "detached" ? sim.tag : false;
-}
-
-function pipelineVarTable(p) {
-  const t = new Map();
-  const known = (k, v) => t.set(k, { k: "known", v: String(v) });
-  const unset = (k) => t.set(k, { k: "unset" });
-  const host = p.project.host, path = p.project.path;
-  const name = path.split("/").pop();
-  const ns = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
-  const db = p.default_branch || "main";
-  const ref = refNameOf(p);
-  const source = sourceOf(p);
-  const tag = isTagOf(p);
-
-  known("CI", "true"); known("GITLAB_CI", "true");
-  known("CI_SERVER_HOST", host); known("CI_SERVER_FQDN", host);
-  known("CI_SERVER_URL", "https://" + host);
-  known("CI_API_V4_URL", "https://" + host + "/api/v4");
-  known("CI_PROJECT_PATH", path); known("CI_PROJECT_NAME", name);
-  known("CI_PROJECT_NAMESPACE", ns);
-  known("CI_PROJECT_ROOT_NAMESPACE", path.split("/")[0]);
-  known("CI_PROJECT_PATH_SLUG", slugify(path));
-  known("CI_PROJECT_URL", "https://" + host + "/" + path);
-  known("CI_DEFAULT_BRANCH", db);
-  known("CI_CONFIG_PATH", p.config_path);
-  known("CI_PIPELINE_SOURCE", source);
-  known("CI_COMMIT_REF_NAME", ref);
-  known("CI_COMMIT_REF_SLUG", slugify(ref));
-  if (p.sha) { known("CI_COMMIT_SHA", p.sha); known("CI_COMMIT_SHORT_SHA", p.sha.slice(0, 8)); }
-  if (tag) { known("CI_COMMIT_TAG", ref); unset("CI_COMMIT_BRANCH"); }
-  else if (source === "merge_request_event") {
-    unset("CI_COMMIT_TAG"); unset("CI_COMMIT_BRANCH");
-    known("CI_MERGE_REQUEST_SOURCE_BRANCH_NAME", ref);
-    known("CI_MERGE_REQUEST_TARGET_BRANCH_NAME", db);
-  } else { unset("CI_COMMIT_TAG"); known("CI_COMMIT_BRANCH", ref); }
-
-  for (const [k, v] of Object.entries(p.variables || {})) known(k, v);
-  return t;
-}
-function jobVarTable(p, job) {
-  const t = pipelineVarTable(p);
-  for (const [k, v] of Object.entries(job.variables || {})) t.set(k, { k: "known", v: String(v) });
-  for (const [k, v] of sim.vars) applySimVar(t, k, v);
-  return t;
-}
 
 /* ================= graph-wide evaluation ================= */
 
@@ -471,15 +60,7 @@ for (const p of G.pipelines) for (const j of p.jobs) pipeOfJob.set(j.id, p);
 
 // Parallel/matrix expansions carry only a stub; the first expansion of each
 // base holds the shared payload (rules, YAML, provenance, variables).
-const baseJobOf = new Map();
-for (const p of G.pipelines) {
-  const firstOfBase = new Map();
-  for (const j of p.jobs) {
-    const base = j.base_name || j.name;
-    if (!firstOfBase.has(base)) firstOfBase.set(base, j);
-    baseJobOf.set(j.id, firstOfBase.get(base));
-  }
-}
+const baseJobOf = baseJobMap(G);
 function payloadJob(j) {
   return baseJobOf.get(j.id) || j;
 }
@@ -491,6 +72,7 @@ function payloadJob(j) {
 
 let wasmEval = null; // (simJsonString) => parsed result | null
 
+/** Resolves to true once the wasm evaluator is live, false when unavailable. */
 function startWasm() {
   const island = document.getElementById("glpv-eval-wasm");
   if (
@@ -498,16 +80,16 @@ function startWasm() {
     typeof WebAssembly === "undefined" ||
     typeof TextEncoder === "undefined"
   )
-    return;
+    return Promise.resolve(false);
   let bytes;
   try {
     const bin = atob(island.textContent.trim());
     bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   } catch (e) {
-    return;
+    return Promise.resolve(false);
   }
-  WebAssembly.instantiate(bytes, {})
+  return WebAssembly.instantiate(bytes, {})
     .then(({ instance }) => {
       const ex = instance.exports;
       const enc = new TextEncoder();
@@ -522,7 +104,7 @@ function startWasm() {
       const [gp, gl_] = put(document.getElementById("glpv-graph").textContent);
       const ok = ex.glpv_init(gp, gl_);
       ex.glpv_dealloc(gp, gl_);
-      if (ok !== 0) return;
+      if (ok !== 0) return false;
       wasmEval = (simJson) => {
         try {
           const [p, l] = put(simJson);
@@ -539,35 +121,28 @@ function startWasm() {
         }
       };
       applyEval(); // re-run under the canonical evaluator
+      return true;
     })
-    .catch(() => {});
+    .catch(() => false);
 }
 
+// The wasm trace is the Rust JSON (snake_case, optional keys); the JS mirror
+// always emits every key. Normalise so the panel sees one shape.
 const adaptTrace = (ts) =>
   (ts || []).map((t) => ({
     index: t.index,
     result: t.result,
     clause: t.clause,
-    when: t.when,
+    when: t.when ?? null,
     varsUsed: t.vars_used || [],
-    note: t.note,
+    note: t.note ?? null,
   }));
 
 function evaluateAll() {
-  const jobEval = new Map();
+  let jobEval = new Map();
   let filled = false;
   if (wasmEval) {
-    const res = wasmEval(
-      JSON.stringify({
-        source: sim.source,
-        ref: sim.ref,
-        tag: sim.tag,
-        vars: sim.vars.filter((v) => v[0]),
-        trace_job: selectedJob,
-        assume_changes: sim.assumeChanges,
-        assume_exists: sim.assumeExists,
-      })
-    );
+    const res = wasmEval(JSON.stringify(wasmSimOf(sim, selectedJob)));
     if (res && res.pipelines) {
       filled = true;
       for (const p of G.pipelines) {
@@ -587,31 +162,7 @@ function evaluateAll() {
       }
     }
   }
-  if (!filled) {
-    for (const p of G.pipelines) {
-      const facts = { source: sourceOf(p), refName: refNameOf(p), isTag: isTagOf(p) };
-      const pvars = pipelineVarTable(p);
-      for (const [k, v] of sim.vars) applySimVar(pvars, k, v);
-      const wf = p.workflow_rules
-        ? evaluateRules(p.workflow_rules, pvars, "on_success", facts, simAtoms())
-        : null;
-      const cache = new Map();
-      for (const j of p.jobs) {
-        const src = payloadJob(j);
-        let ev = cache.get(src.id);
-        if (!ev) {
-          ev = evaluateRules(src.rules, jobVarTable(p, src), src.when, facts, simAtoms());
-          cache.set(src.id, ev);
-        }
-        if (wf && wf.outcome === "skipped") {
-          ev = { ...ev, outcome: "blocked", blockedBy: "workflow:rules" };
-        } else if (wf && wf.outcome === "unknown" && ev.outcome !== "skipped") {
-          ev = { ...ev, outcome: "unknown", blockedBy: "workflow:rules undecided" };
-        }
-        jobEval.set(j.id, ev);
-      }
-    }
-  }
+  if (!filled) jobEval = evaluateGraph(G, sim, baseJobOf);
 
   // Pipeline reachability through trigger edges.
   const rank = { off: 0, unknown: 1, gate: 2, on: 3 };
@@ -1058,8 +609,10 @@ function buildScene() {
     }
   }
 
-  buildEdges();
+  // The grid indexes pills only and must exist before edges are routed:
+  // the label allocator consults it to keep labels off pills.
   buildGrid();
+  buildEdges();
 }
 
 /* ---- edges: tessellated béziers with arc length for dashes & pulses ---- */
@@ -2666,7 +2219,7 @@ function buildSimbar() {
 
   const reset = h("button", "", "reset");
   reset.addEventListener("click", () => {
-    sim.source = (G.scenarios[0] && G.scenarios[0].source) || "push";
+    sim.source = DEFAULT_SOURCE;
     sim.ref = ""; sim.tag = false; sim.vars = [];
     sim.assumeChanges = null; sim.assumeExists = null;
     srcSel.value = sim.source; refIn.value = ""; tagCb.checked = false;
@@ -2751,8 +2304,8 @@ function gateChainFor(job, p) {
 }
 
 function gateBaseTable(g) {
-  if (g.job) return jobVarTable(g.pipeline, g.job);
-  const pv = pipelineVarTable(g.pipeline);
+  if (g.job) return jobVarTable(g.pipeline, g.job, sim);
+  const pv = pipelineVarTable(g.pipeline, sim);
   for (const [k, v] of sim.vars) applySimVar(pv, k, v);
   return pv;
 }
@@ -2837,11 +2390,7 @@ function evalGateWorld(g, baseTable, facts, assign, gi) {
 }
 
 function solveOutcomes(gates, ctx) {
-  const facts = gates.map((g) => ({
-    source: sourceOf(g.pipeline),
-    refName: refNameOf(g.pipeline),
-    isTag: isTagOf(g.pipeline),
-  }));
+  const facts = gates.map((g) => factsOf(g.pipeline, sim));
   let nodes = 0;
   const treeSig = (t) =>
     t.leaf
@@ -3293,11 +2842,7 @@ function findEnablingScenario(gates) {
 
 function searchScenario(gates, cand) {
   const tables = gates.map(gateBaseTable);
-  const facts = gates.map((g) => ({
-    source: sourceOf(g.pipeline),
-    refName: refNameOf(g.pipeline),
-    isTag: isTagOf(g.pipeline),
-  }));
+  const facts = gates.map((g) => factsOf(g.pipeline, sim));
   let nodes = 0;
   const rec = (assign, atomAssign) => {
     if (nodes++ > 8000) return null;
@@ -3527,11 +3072,7 @@ function renderPanel(id) {
     panel.appendChild(h("h3", "", "Invocation simulation"));
     const gates = gateChainFor(job, p);
     const gTables = gates.map(gateBaseTable);
-    const gFacts = gates.map((g2) => ({
-      source: sourceOf(g2.pipeline),
-      refName: refNameOf(g2.pipeline),
-      isTag: isTagOf(g2.pipeline),
-    }));
+    const gFacts = gates.map((g2) => factsOf(g2.pipeline, sim));
     const emptyA = new Map();
     const steps = gates.map((g2, gi) => {
       const evx = evalGateSim(g2, gTables[gi], gFacts[gi], emptyA, emptyA);
@@ -3912,7 +3453,7 @@ viewport.addEventListener("wheel", (e) => {
 let dragState = null;
 viewport.addEventListener("pointerdown", (e) => {
   dragState = { x: e.clientX, y: e.clientY, tx: view.tx, ty: view.ty, moved: false };
-  viewport.setPointerCapture(e.pointerId);
+  if (viewport.setPointerCapture) viewport.setPointerCapture(e.pointerId);
 });
 viewport.addEventListener("pointermove", (e) => {
   if (dragState) {
@@ -4099,19 +3640,34 @@ resize();
 applyEval();
 fitView();
 watchTheme();
-startWasm();
+const wasmReady = startWasm();
 startPulse();
 
 if (typeof ResizeObserver === "function") new ResizeObserver(resize).observe(viewport);
 else if (typeof addEventListener === "function") addEventListener("resize", resize);
 
-// Introspection hook for headless smoke tests.
-window.__glpvStats = {
-  mode,
-  pills: scene.pills.length,
-  cards: scene.cards.length,
-  edges: scene.edges.length,
-  wasm: () => !!wasmEval,
-  edgeMode: () => edgeMode,
-  lineage: () => (selLineage ? { pills: selLineage.pills.size, edges: selLineage.edges.size } : null),
-};
+// Test surface for the headless harness (ui/test/viewer.test.mjs). Live
+// getters where state is reassigned; everything else is the object itself.
+window.__glpv = window.__glpv || {};
+// Live getters must be defined, not assigned (Object.assign would copy their
+// current values).
+Object.defineProperties(window.__glpv, {
+  mode: { get: () => mode, enumerable: true },
+  selectedJob: { get: () => selectedJob, enumerable: true },
+  edgeMode: { get: () => edgeMode, enumerable: true },
+});
+Object.assign(window.__glpv, {
+  G, scene, sim, view, panel, viewport, counts, simbar,
+  canvases: [glCanvas, txtCanvas],
+  lastEval: () => lastEval,
+  lineage: () => selLineage,
+  wasmActive: () => !!wasmEval,
+  wasmReady,
+  disableWasm() { wasmEval = null; applyEval(); },
+  jobById, payloadJob, pipeOfJob, selectJob, flyTo, applyEval, evaluateAll,
+  renderPanel, gateChainFor, collectClauseInputs, solveOutcomes,
+  findEnablingScenario, applyScenario, buildOutcomeExplorer,
+  refreshSimBar: () => refreshSimBarFn && refreshSimBarFn(),
+  draw, resize,
+  errors: __glpvErrors,
+});
