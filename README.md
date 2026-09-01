@@ -80,6 +80,7 @@ $ glpv scan --projects corpus --entry gitlab-org/gitlab -o out/
 ```console
 $ cargo test --workspace          # unit + fixture snapshot tests
 $ cargo clippy --workspace
+$ npm ci && npm test              # viewer tests (node 22): evaluator parity + jsdom smoke
 ```
 
 The HTML viewer renders its board on the GPU (WebGL2 scene + canvas text
@@ -87,6 +88,26 @@ overlay, with a Canvas2D fallback) and evaluates rules with the canonical
 Rust evaluator compiled to WebAssembly. `scripts/build-wasm.sh` rebuilds
 `ui/eval-wasm.b64` from `crates/glpv-wasm`; an empty file makes the viewer
 fall back to its mirrored JS evaluator.
+
+The viewer source is two files embedded into one script scope: `ui/eval.js`
+(the JS mirror of the rules engine and the simulated variable tables — no DOM,
+`require()`-able from node) and `ui/app.js` (the board, panel and simulation
+UI). `npm test` first builds the two sample scans (`pretest` runs the fixture
+and demo builders through cargo; `GLPV_SKIP_PREPARE=1` reuses existing ones)
+and then runs:
+
+- `ui/test/parity.test.mjs` — `tests/parity/expr-cases.json` is the single
+  source of truth for `rules:if` semantics, asserted by both the Rust unit
+  test `rules::expr::tests::parity_cases` and the JS mirror; then the embedded
+  wasm build and the mirror evaluate every job of both samples under a matrix
+  of simulations and must agree on outcomes and traces byte for byte. Rebuild
+  `ui/eval-wasm.b64` after touching `crates/glpv-core/src/rules/` — the parity
+  test fails against a stale build.
+- `ui/test/viewer.test.mjs` — a jsdom smoke run of the whole viewer (boot with
+  and without wasm, layout sanity, selection → panel, enable-in-simulation,
+  outcome explorer). Text metrics and PNG snapshots need the optional `canvas`
+  package; `GLPV_SHOTS=1 npm test` writes board screenshots to
+  `target/ui-test/shots/`.
 
 Fixture repositories are built deterministically from
 `tests/fixtures/projects/*/spec.toml` into `target/glpv-fixtures/`.
