@@ -1,0 +1,71 @@
+# GitHub Pages: live examples of what a scan produces. Rebuilt on every push
+# to master that can change the output, on demand, and weekly (the gitlab-org
+# map tracks upstream's master).
+#
+#   /            landing page (docs/pages/index.html)
+#   /demo/       the five-project demo (demo/projects)
+#   /gitlab-org/ gitlab-org/gitlab and its downstream projects, scanned with a
+#                real diff against master~1
+name: pages
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "crates/**"
+      - "ui/**"
+      - "demo/**"
+      - "docs/pages/**"
+      - "scripts/fetch-gitlab-corpus.sh"
+      - ".github/workflows/pages.yml"
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: build glpv
+        run: cargo build --release --locked -p glpv-cli
+      - name: demo
+        run: |
+          cargo run -q --release -p glpv-cli --example build_fixtures -- demo/projects target/pages-demo
+          ./target/release/glpv scan --projects target/pages-demo --entry pipelines-demo/shop \
+            -o site/demo --format html,json,mermaid
+      - name: gitlab-org corpus
+        run: |
+          scripts/fetch-gitlab-corpus.sh corpus
+          ./target/release/glpv scan --projects corpus --entry gitlab-org/gitlab \
+            --diff origin/master~1 -o site/gitlab-org --format html,json
+      - name: landing page
+        run: |
+          cp docs/pages/index.html site/index.html
+          cp docs/img/demo-map.png docs/img/gitlab-org-map.png site/
+          echo "built $(date -u +%Y-%m-%dT%H:%MZ) from $GITHUB_SHA" > site/build.txt
+          du -sh site/*
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
