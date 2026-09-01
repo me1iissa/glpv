@@ -92,9 +92,19 @@ fn divergences_are_reported() {
     let (server_yaml, mut server_jobs) = oracle_from(&output);
 
     // a changed merged value shows up in the diff
-    let mutated = server_yaml.replacen("script:", "script:\n      - echo injected", 1);
+    let mut server = check::yaml_to_json(&server_yaml).unwrap();
+    let job = server
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+        .find(|v| v.get("script").is_some())
+        .expect("a job with a script");
+    job["script"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::Value::String("echo injected".into()));
     let local = check::normalize_root(node_to_json(output.merged_root.as_ref().unwrap()));
-    let server = check::normalize_root(check::yaml_to_json(&mutated).unwrap());
+    let server = check::normalize_root(server);
     let diff = check::unified_diff(&local, &server).expect("a difference");
     assert!(diff.contains("echo injected"), "{diff}");
 
