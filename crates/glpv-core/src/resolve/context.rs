@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use glpv_yaml::FileId;
 
+use crate::diff::{DiffOracle, DiffSpec};
 use crate::model::{self, Diagnostic, PipelineId, Severity};
 use crate::source::{ProjectSource, SourceMap, Sources, TreeRef};
 
@@ -16,6 +17,9 @@ pub struct ResolveOpts {
     pub max_pipelines: u32,
     /// Record per-leaf-key winning spans on every job (large graphs get big).
     pub full_provenance: bool,
+    /// The changed files `rules:changes` is evaluated against in every root
+    /// project (`None`: clauses without `compare_to` stay undecided).
+    pub diff: Option<DiffSpec>,
 }
 
 impl Default for ResolveOpts {
@@ -26,6 +30,7 @@ impl Default for ResolveOpts {
             embed_sources: true,
             max_pipelines: 200,
             full_provenance: false,
+            diff: None,
         }
     }
 }
@@ -73,6 +78,11 @@ pub struct ResolveState<'a> {
     pub budget_used: u32,
     pub stack: Vec<StackKey>,
     pub order_counter: u32,
+    /// The pipeline's diff oracle, for `include:rules:changes` (always the
+    /// root pipeline's diff, never the include frame's).
+    pub diff: Option<Arc<DiffOracle>>,
+    /// See `EvalContext::push_event`.
+    pub push_event: bool,
 }
 
 impl ResolveState<'_> {

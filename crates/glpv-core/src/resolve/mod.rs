@@ -18,6 +18,7 @@ use std::sync::Arc;
 use glpv_yaml::{FileId, Node};
 use indexmap::IndexMap;
 
+use crate::diff::DiffOracle;
 use crate::model::{
     self, Diagnostic, IncludeKind, PipelineId, PipelineKind, Severity, Unresolved, UnresolvedReason,
 };
@@ -56,6 +57,15 @@ pub struct PipelineRequest {
     pub parent: Option<(PipelineId, String)>,
     /// Inputs supplied by the including/triggering side (spec:inputs values).
     pub inputs: IndexMap<String, Node>,
+    /// The diff `rules:changes` is evaluated against (shared with child
+    /// pipelines, which inherit the parent's).
+    pub diff: Option<Arc<DiffOracle>>,
+    /// `diff` is the parent's: the graph JSON then records only this
+    /// pipeline's `compare_to` lists, not the files again.
+    pub diff_inherited: bool,
+    /// Whether this pipeline has a changed-paths set at all (see
+    /// `rules::changes::has_push_event`).
+    pub push_event: bool,
 }
 
 pub struct PipelineOutcome {
@@ -102,6 +112,8 @@ pub fn resolve_pipeline(
         budget_used: 0,
         stack: Vec::new(),
         order_counter: 0,
+        diff: req.diff.clone(),
+        push_event: req.push_event,
     };
 
     let make_pipeline = |st: &ResolveState<'_>,
@@ -118,6 +130,7 @@ pub fn resolve_pipeline(
             sha: sha.clone(),
             config_path: config_label.clone(),
             default_branch: None,
+            diff: None,
             variables: indexmap::IndexMap::new(),
             entry_source,
             stages,

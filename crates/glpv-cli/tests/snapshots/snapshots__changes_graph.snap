@@ -1,0 +1,987 @@
+---
+source: crates/glpv-cli/tests/snapshots.rs
+expression: value
+---
+{
+  "schema_version": 1,
+  "generated_at": "[timestamp]",
+  "tool": {
+    "name": "glpv",
+    "version": "[version]",
+    "args": []
+  },
+  "scenarios": [
+    {
+      "id": "push@default",
+      "source": "push",
+      "git_ref": null,
+      "vars": {}
+    }
+  ],
+  "pipelines": [
+    {
+      "id": "p-d306fc36ffd52941",
+      "kind": "root",
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/changes",
+        "path_lc": "fx/changes"
+      },
+      "git_ref": "main",
+      "sha": "b99f5510da03b788cde04c7ad21a555a0392a1a8",
+      "config_path": ".gitlab-ci.yml",
+      "default_branch": "main",
+      "diff": {
+        "base": "v1",
+        "files": [
+          ".hidden/config",
+          "docs/sub/x.md",
+          "scripts/build.sh",
+          "src/main.rs",
+          "src/util/helpers.rs"
+        ],
+        "compare_to": {
+          "release": [
+            ".hidden/config",
+            "scripts/build.sh",
+            "src/main.rs"
+          ]
+        }
+      },
+      "entry_source": 0,
+      "stages": [
+        ".pre",
+        "build",
+        "docs",
+        "check",
+        ".post"
+      ],
+      "jobs": [
+        {
+          "id": "p-d306fc36ffd52941/docs-extra",
+          "name": "docs-extra",
+          "stage": "docs",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "none"
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 1,
+              "start": [
+                1,
+                1
+              ],
+              "end": [
+                1,
+                11
+              ]
+            }
+          },
+          "merged_yaml": "stage: docs\nscript:\n  - echo docs-extra\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "runs"
+            }
+          ]
+        },
+        {
+          "id": "p-d306fc36ffd52941/build",
+          "name": "build",
+          "stage": "build",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "conditional",
+            "rules": [
+              {
+                "changes": [
+                  "src/**/*"
+                ],
+                "span": {
+                  "file": 0,
+                  "start": [
+                    23,
+                    7
+                  ],
+                  "end": [
+                    25,
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                19,
+                1
+              ],
+              "end": [
+                19,
+                6
+              ]
+            }
+          },
+          "merged_yaml": "stage: build\nscript:\n  - cargo build\nrules:\n  - changes:\n      - src/**/*\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "runs",
+              "trace": [
+                {
+                  "index": 0,
+                  "result": "matched",
+                  "clause": "changes: [src/**/*]",
+                  "when": "on_success",
+                  "note": "changes: matched by src/main.rs"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "p-d306fc36ffd52941/docs",
+          "name": "docs",
+          "stage": "docs",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "conditional",
+            "rules": [
+              {
+                "changes": [
+                  "docs/**/*.{md,rst}"
+                ],
+                "span": {
+                  "file": 0,
+                  "start": [
+                    29,
+                    7
+                  ],
+                  "end": [
+                    31,
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                25,
+                1
+              ],
+              "end": [
+                25,
+                5
+              ]
+            }
+          },
+          "merged_yaml": "stage: docs\nscript:\n  - mkdocs build\nrules:\n  - changes:\n      - docs/**/*.{md,rst}\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "runs",
+              "trace": [
+                {
+                  "index": 0,
+                  "result": "matched",
+                  "clause": "changes: [docs/**/*.{md,rst}]",
+                  "when": "on_success",
+                  "note": "changes: matched by docs/sub/x.md"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "p-d306fc36ffd52941/lint-yaml",
+          "name": "lint-yaml",
+          "stage": "check",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "conditional",
+            "rules": [
+              {
+                "changes": [
+                  "**/*.{yml,yaml}{,.*}"
+                ],
+                "span": {
+                  "file": 0,
+                  "start": [
+                    35,
+                    7
+                  ],
+                  "end": [
+                    37,
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                31,
+                1
+              ],
+              "end": [
+                31,
+                10
+              ]
+            }
+          },
+          "merged_yaml": "stage: check\nscript:\n  - yamllint .\nrules:\n  - changes:\n      - \"**/*.{yml,yaml}{,.*}\"\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "skipped",
+              "trace": [
+                {
+                  "index": 0,
+                  "result": "no_match",
+                  "clause": "changes: [**/*.{yml,yaml}{,.*}]",
+                  "when": "on_success",
+                  "note": "changes: no match in 5 changed file(s)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "p-d306fc36ffd52941/never-first",
+          "name": "never-first",
+          "stage": "check",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "conditional",
+            "rules": [
+              {
+                "changes": [
+                  "scripts/*"
+                ],
+                "when": "never",
+                "span": {
+                  "file": 0,
+                  "start": [
+                    41,
+                    7
+                  ],
+                  "end": [
+                    43,
+                    5
+                  ]
+                }
+              },
+              {
+                "when": "on_success",
+                "span": {
+                  "file": 0,
+                  "start": [
+                    43,
+                    7
+                  ],
+                  "end": [
+                    45,
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                37,
+                1
+              ],
+              "end": [
+                37,
+                12
+              ]
+            }
+          },
+          "merged_yaml": "stage: check\nscript:\n  - echo never-first\nrules:\n  - changes:\n      - scripts/*\n    when: never\n  - when: on_success\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "skipped",
+              "trace": [
+                {
+                  "index": 0,
+                  "result": "matched",
+                  "clause": "changes: [scripts/*]",
+                  "when": "never",
+                  "note": "changes: matched by scripts/build.sh"
+                },
+                {
+                  "index": 1,
+                  "result": "not_reached",
+                  "clause": "(always)",
+                  "when": "on_success"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "p-d306fc36ffd52941/docs-vs-release",
+          "name": "docs-vs-release",
+          "stage": "docs",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "conditional",
+            "rules": [
+              {
+                "changes": [
+                  "docs/**/*"
+                ],
+                "compare_to": "release",
+                "span": {
+                  "file": 0,
+                  "start": [
+                    49,
+                    7
+                  ],
+                  "end": [
+                    53,
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                45,
+                1
+              ],
+              "end": [
+                45,
+                16
+              ]
+            }
+          },
+          "merged_yaml": "stage: docs\nscript:\n  - echo docs-vs-release\nrules:\n  - changes:\n      paths:\n        - docs/**/*\n      compare_to: release\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "skipped",
+              "trace": [
+                {
+                  "index": 0,
+                  "result": "no_match",
+                  "clause": "changes: [docs/**/*] compare_to: release",
+                  "when": "on_success",
+                  "note": "changes: no match in 3 changed file(s)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "p-d306fc36ffd52941/qmark",
+          "name": "qmark",
+          "stage": "check",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "conditional",
+            "rules": [
+              {
+                "changes": [
+                  "src/main.??"
+                ],
+                "span": {
+                  "file": 0,
+                  "start": [
+                    57,
+                    7
+                  ],
+                  "end": [
+                    59,
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                53,
+                1
+              ],
+              "end": [
+                53,
+                6
+              ]
+            }
+          },
+          "merged_yaml": "stage: check\nscript:\n  - echo qmark\nrules:\n  - changes:\n      - src/main.??\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "runs",
+              "trace": [
+                {
+                  "index": 0,
+                  "result": "matched",
+                  "clause": "changes: [src/main.??]",
+                  "when": "on_success",
+                  "note": "changes: matched by src/main.rs"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "p-d306fc36ffd52941/class",
+          "name": "class",
+          "stage": "check",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "conditional",
+            "rules": [
+              {
+                "changes": [
+                  "scripts/[a-c]*.sh"
+                ],
+                "span": {
+                  "file": 0,
+                  "start": [
+                    63,
+                    7
+                  ],
+                  "end": [
+                    65,
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                59,
+                1
+              ],
+              "end": [
+                59,
+                6
+              ]
+            }
+          },
+          "merged_yaml": "stage: check\nscript:\n  - echo class\nrules:\n  - changes:\n      - scripts/[a-c]*.sh\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "runs",
+              "trace": [
+                {
+                  "index": 0,
+                  "result": "matched",
+                  "clause": "changes: [scripts/[a-c]*.sh]",
+                  "when": "on_success",
+                  "note": "changes: matched by scripts/build.sh"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "p-d306fc36ffd52941/dotmatch",
+          "name": "dotmatch",
+          "stage": "check",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "conditional",
+            "rules": [
+              {
+                "changes": [
+                  "**/config"
+                ],
+                "span": {
+                  "file": 0,
+                  "start": [
+                    69,
+                    7
+                  ],
+                  "end": [
+                    71,
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                65,
+                1
+              ],
+              "end": [
+                65,
+                9
+              ]
+            }
+          },
+          "merged_yaml": "stage: check\nscript:\n  - echo dotmatch\nrules:\n  - changes:\n      - \"**/config\"\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "runs",
+              "trace": [
+                {
+                  "index": 0,
+                  "result": "matched",
+                  "clause": "changes: [**/config]",
+                  "when": "on_success",
+                  "note": "changes: matched by .hidden/config"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "p-d306fc36ffd52941/slash",
+          "name": "slash",
+          "stage": "check",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "conditional",
+            "rules": [
+              {
+                "changes": [
+                  "/src/main.rs"
+                ],
+                "span": {
+                  "file": 0,
+                  "start": [
+                    75,
+                    7
+                  ],
+                  "end": [
+                    77,
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                71,
+                1
+              ],
+              "end": [
+                71,
+                6
+              ]
+            }
+          },
+          "merged_yaml": "stage: check\nscript:\n  - echo slash\nrules:\n  - changes:\n      - /src/main.rs\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "skipped",
+              "trace": [
+                {
+                  "index": 0,
+                  "result": "no_match",
+                  "clause": "changes: [/src/main.rs]",
+                  "when": "on_success",
+                  "note": "changes: no match in 5 changed file(s)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "p-d306fc36ffd52941/var-pattern",
+          "name": "var-pattern",
+          "stage": "check",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "conditional",
+            "rules": [
+              {
+                "changes": [
+                  "$SRC_DIR/**/*"
+                ],
+                "span": {
+                  "file": 0,
+                  "start": [
+                    83,
+                    7
+                  ],
+                  "end": [
+                    85,
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          "variables": {
+            "SRC_DIR": "src"
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                77,
+                1
+              ],
+              "end": [
+                77,
+                12
+              ]
+            }
+          },
+          "merged_yaml": "stage: check\nvariables:\n  SRC_DIR: src\nscript:\n  - echo var-pattern\nrules:\n  - changes:\n      - $SRC_DIR/**/*\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "runs",
+              "trace": [
+                {
+                  "index": 0,
+                  "result": "matched",
+                  "clause": "changes: [$SRC_DIR/**/*]",
+                  "when": "on_success",
+                  "note": "changes: matched by src/main.rs"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "p-d306fc36ffd52941/unknown-var",
+          "name": "unknown-var",
+          "stage": "check",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "conditional",
+            "rules": [
+              {
+                "changes": [
+                  "$UNKNOWN_DIR/**/*"
+                ],
+                "span": {
+                  "file": 0,
+                  "start": [
+                    89,
+                    7
+                  ],
+                  "end": [
+                    91,
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                85,
+                1
+              ],
+              "end": [
+                85,
+                12
+              ]
+            }
+          },
+          "merged_yaml": "stage: check\nscript:\n  - echo unknown-var\nrules:\n  - changes:\n      - $UNKNOWN_DIR/**/*\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "unknown",
+              "trace": [
+                {
+                  "index": 0,
+                  "result": "unknown",
+                  "clause": "changes: [$UNKNOWN_DIR/**/*]",
+                  "when": "on_success",
+                  "note": "changes: $UNKNOWN_DIR unknown"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "p-d306fc36ffd52941/bare-star",
+          "name": "bare-star",
+          "stage": "docs",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "conditional",
+            "rules": [
+              {
+                "changes": [
+                  "docs/**"
+                ],
+                "span": {
+                  "file": 0,
+                  "start": [
+                    95,
+                    7
+                  ],
+                  "end": [
+                    96,
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                91,
+                1
+              ],
+              "end": [
+                91,
+                10
+              ]
+            }
+          },
+          "merged_yaml": "stage: docs\nscript:\n  - echo bare-star\nrules:\n  - changes:\n      - docs/**\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "skipped",
+              "trace": [
+                {
+                  "index": 0,
+                  "result": "no_match",
+                  "clause": "changes: [docs/**]",
+                  "when": "on_success",
+                  "note": "changes: no match in 5 changed file(s)"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "workflow_rules": {
+        "mode": "conditional",
+        "rules": [
+          {
+            "if": "$CI_COMMIT_TAG",
+            "when": "always",
+            "span": {
+              "file": 0,
+              "start": [
+                3,
+                7
+              ],
+              "end": [
+                5,
+                5
+              ]
+            }
+          },
+          {
+            "changes": [
+              "*.txt"
+            ],
+            "when": "never",
+            "span": {
+              "file": 0,
+              "start": [
+                5,
+                7
+              ],
+              "end": [
+                7,
+                5
+              ]
+            }
+          },
+          {
+            "when": "always",
+            "span": {
+              "file": 0,
+              "start": [
+                7,
+                7
+              ],
+              "end": [
+                9,
+                1
+              ]
+            }
+          }
+        ]
+      },
+      "depth": 0,
+      "includes": [
+        0,
+        1
+      ]
+    }
+  ],
+  "trigger_edges": [],
+  "include_files": [
+    {
+      "file": 0,
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/changes",
+        "path_lc": "fx/changes"
+      },
+      "sha": "b99f5510da03b788cde04c7ad21a555a0392a1a8",
+      "path": ".gitlab-ci.yml",
+      "kind": "entry",
+      "location": ".gitlab-ci.yml"
+    },
+    {
+      "file": 1,
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/changes",
+        "path_lc": "fx/changes"
+      },
+      "sha": "b99f5510da03b788cde04c7ad21a555a0392a1a8",
+      "path": "ci/docs.yml",
+      "kind": "local",
+      "location": "ci/docs.yml"
+    }
+  ],
+  "include_edges": [
+    {
+      "from": 0,
+      "to": 1,
+      "location": "ci/docs.yml",
+      "order": 0,
+      "span": {
+        "file": 0,
+        "start": [
+          12,
+          5
+        ],
+        "end": [
+          15,
+          3
+        ]
+      },
+      "pipeline": "p-d306fc36ffd52941"
+    }
+  ],
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "code": "rules.changes-leading-slash",
+      "message": "`changes: /src/main.rs` never matches: GitLab compares repository-relative paths",
+      "span": {
+        "file": 0,
+        "start": [
+          75,
+          7
+        ],
+        "end": [
+          77,
+          1
+        ]
+      },
+      "pipeline": "p-d306fc36ffd52941"
+    }
+  ],
+  "sources": [
+    {
+      "file": 0,
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/changes",
+        "path_lc": "fx/changes"
+      },
+      "sha": "b99f5510da03b788cde04c7ad21a555a0392a1a8",
+      "path": ".gitlab-ci.yml",
+      "text": "workflow:\n  rules:\n    - if: $CI_COMMIT_TAG\n      when: always\n    - changes: [\"*.txt\"]\n      when: never\n    - when: always\n\nstages: [build, docs, check]\n\ninclude:\n  - local: ci/docs.yml\n    rules:\n      - changes: [\"docs/**/*\"]\n  - local: ci/never.yml\n    rules:\n      - changes: [\"nothing/**/*\"]\n\nbuild:\n  stage: build\n  script: [cargo build]\n  rules:\n    - changes: [\"src/**/*\"]\n\ndocs:\n  stage: docs\n  script: [mkdocs build]\n  rules:\n    - changes: [\"docs/**/*.{md,rst}\"]\n\nlint-yaml:\n  stage: check\n  script: [yamllint .]\n  rules:\n    - changes: [\"**/*.{yml,yaml}{,.*}\"]\n\nnever-first:\n  stage: check\n  script: [echo never-first]\n  rules:\n    - changes: [\"scripts/*\"]\n      when: never\n    - when: on_success\n\ndocs-vs-release:\n  stage: docs\n  script: [echo docs-vs-release]\n  rules:\n    - changes:\n        paths: [\"docs/**/*\"]\n        compare_to: release\n\nqmark:\n  stage: check\n  script: [echo qmark]\n  rules:\n    - changes: [\"src/main.??\"]\n\nclass:\n  stage: check\n  script: [echo class]\n  rules:\n    - changes: [\"scripts/[a-c]*.sh\"]\n\ndotmatch:\n  stage: check\n  script: [echo dotmatch]\n  rules:\n    - changes: [\"**/config\"]\n\nslash:\n  stage: check\n  script: [echo slash]\n  rules:\n    - changes: [\"/src/main.rs\"]\n\nvar-pattern:\n  stage: check\n  variables:\n    SRC_DIR: src\n  script: [echo var-pattern]\n  rules:\n    - changes: [\"$SRC_DIR/**/*\"]\n\nunknown-var:\n  stage: check\n  script: [echo unknown-var]\n  rules:\n    - changes: [\"$UNKNOWN_DIR/**/*\"]\n\nbare-star:\n  stage: docs\n  script: [echo bare-star]\n  rules:\n    - changes: [\"docs/**\"]\n"
+    },
+    {
+      "file": 1,
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/changes",
+        "path_lc": "fx/changes"
+      },
+      "sha": "b99f5510da03b788cde04c7ad21a555a0392a1a8",
+      "path": "ci/docs.yml",
+      "text": "docs-extra:\n  stage: docs\n  script: [echo docs-extra]\n"
+    }
+  ]
+}

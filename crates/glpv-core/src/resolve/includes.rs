@@ -17,8 +17,10 @@ use crate::model::{self, IncludeKind, Severity, Unresolved, UnresolvedReason};
 use crate::resolve::context::{Frame, ResolveState, StackKey};
 use crate::resolve::document::load_document;
 use crate::resolve::merge::merge;
+use crate::rules::ChangesQuery;
+use crate::rules::expr::Tri;
 use crate::source::{FileOrigin, ProjectKey, ProjectSource, TreeRef};
-use crate::vars::VarTable;
+use crate::vars::{VarState, VarTable};
 
 pub struct IncludeSpec {
     pub kind: SpecKind,
@@ -76,7 +78,7 @@ pub fn expand_include_node(
     let specs = normalize(st, include_node);
     let mut acc: Option<Node> = None;
     for spec in specs {
-        match evaluate_include_rules(st, frame, &spec) {
+        match evaluate_include_rules(st, frame, &spec, vars) {
             RulesOutcome::Skip => continue,
             RulesOutcome::Unknown => st.diag_at(
                 Severity::Info,
@@ -263,12 +265,14 @@ enum RulesOutcome {
 }
 
 /// Static `include:rules` evaluation: `exists` clauses evaluate against the
-/// current frame; `if`/`changes` are undecidable until the M4 evaluator and
-/// make the outcome Unknown (conservatively included).
+/// current frame; `changes` against the root pipeline's diff (GitLab never
+/// uses the include frame's); `if` is undecidable here and makes the outcome
+/// Unknown (conservatively included).
 fn evaluate_include_rules(
     st: &mut ResolveState<'_>,
     frame: &Frame,
     spec: &IncludeSpec,
+    vars: &VarTable,
 ) -> RulesOutcome {
     let Some(rules) = &spec.rules else {
         return RulesOutcome::Include;
@@ -282,8 +286,31 @@ fn evaluate_include_rules(
             continue;
         };
         let mut result = Some(true); // None = unknown
-        if m.contains_key("if") || m.contains_key("changes") {
+        if m.contains_key("if") {
             result = None;
+        }
+        if let Some(changes) = m.get("changes") {
+            let changes = crate::rules::parse_changes_node(changes);
+            let diff = st.diff.clone();
+            let checker = |q: &ChangesQuery<'_>| diff.as_ref()?.check(q);
+            let source = match vars.get("CI_PIPELINE_SOURCE") {
+                VarState::Known(s) => s,
+                _ => String::new(),
+            };
+            let (tri, _) = crate::rules::eval_changes(
+                &changes.paths,
+                changes.compare_to.as_deref(),
+                changes.regexp.as_deref(),
+                vars,
+                st.push_event,
+                &source,
+                Some(&checker),
+            );
+            match tri {
+                Tri::True => {}
+                Tri::False => result = Some(false),
+                Tri::Unknown => result = None,
+            }
         }
         if let Some(exists) = m.get("exists") {
             let patterns: Vec<String> = match &exists.untag().kind {

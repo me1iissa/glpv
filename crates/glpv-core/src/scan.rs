@@ -11,11 +11,14 @@ use std::sync::Arc;
 use glpv_yaml::Node;
 use indexmap::IndexMap;
 
+use crate::diff::DiffOracle;
 use crate::model::{
     self, Diagnostic, Graph, PipelineId, PipelineKind, ProjectRef, Severity, ToolInfo, TriggerKind,
     Unresolved, UnresolvedReason,
 };
 use crate::resolve::{Entry, PipelineRequest, ResolveOpts, resolve_pipeline};
+use crate::rules::changes::has_push_event;
+use crate::rules::{ChangesMatch, ChangesQuery};
 use crate::source::local::LocalGitProject;
 use crate::source::{ProjectKey, ProjectSource, SourceMap, Sources, TreeRef};
 use crate::vars::{Scenario, VarState, VarTable, predefined_vars};
@@ -40,6 +43,10 @@ struct PipeCtx {
     scenario: Scenario,
     child_depth: u32,
     merged_root: Option<Node>,
+    /// See `PipelineRequest::diff` / `diff_inherited` / `push_event`.
+    diff: Option<Arc<DiffOracle>>,
+    diff_inherited: bool,
+    push_event: bool,
 }
 
 type VisitKey = (String, String, String, String); // host, path_lc, ref, config label
@@ -79,6 +86,9 @@ impl<'a> GraphBuilder<'a> {
         let scenario = req.scenario.clone();
         let project = req.project.clone();
         let tree = req.tree.clone();
+        let diff = req.diff.clone();
+        let diff_inherited = req.diff_inherited;
+        let push_event = req.push_event;
         let outcome = resolve_pipeline(
             &mut self.files,
             &mut self.diags,
@@ -86,6 +96,7 @@ impl<'a> GraphBuilder<'a> {
             self.sources,
             req,
         );
+        let id = outcome.pipeline.id.clone();
         self.include_files.extend(outcome.include_files);
         self.include_edges.extend(outcome.include_edges);
         self.pipelines.push(outcome.pipeline);
@@ -95,8 +106,23 @@ impl<'a> GraphBuilder<'a> {
             scenario,
             child_depth,
             merged_root: outcome.merged_root,
+            diff,
+            diff_inherited,
+            push_event,
         });
+        if let Some(o) = self.ctxs.last().and_then(|c| c.diff.clone()) {
+            self.drain_oracle(&o, &id);
+        }
         self.pipelines.len() - 1
+    }
+
+    /// Move the diff oracle's queued diagnostics into the graph, stamped
+    /// with the pipeline they surfaced in.
+    fn drain_oracle(&mut self, oracle: &DiffOracle, id: &PipelineId) {
+        for mut d in oracle.take_diags() {
+            d.pipeline = Some(id.clone());
+            self.diags.push(d);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -139,6 +165,7 @@ impl<'a> GraphBuilder<'a> {
             sha: None,
             config_path: config_label,
             default_branch: None,
+            diff: None,
             variables: IndexMap::new(),
             entry_source: None,
             stages: Vec::new(),
@@ -159,6 +186,9 @@ impl<'a> GraphBuilder<'a> {
             scenario: Scenario::push_default(),
             child_depth: 0,
             merged_root: None,
+            diff: None,
+            diff_inherited: false,
+            push_event: false,
         });
         self.pipelines.len() - 1
     }
@@ -273,6 +303,12 @@ impl<'a> GraphBuilder<'a> {
                 .or_else(|| scenario.git_ref.clone())
                 .unwrap_or(default_branch);
             let is_tag = scenario.is_tag;
+            let diff = self.ctxs[idx].diff.clone();
+            let push_event = self.ctxs[idx].push_event;
+            let changes_checker =
+                |q: &ChangesQuery<'_>| -> Option<ChangesMatch> { diff.as_ref()?.check(q) };
+            // Expanded `compare_to` refs, for the graph JSON.
+            let mut compare_refs: Vec<String> = Vec::new();
 
             let exists_checker = |patterns: &[String]| -> Option<bool> {
                 let listing = project.list_tree(&tree).ok()?;
@@ -285,13 +321,15 @@ impl<'a> GraphBuilder<'a> {
             // Workflow gate first (pipeline-level variables only).
             let wf_vars = self.trigger_vars(idx, "");
             let wf_outcome = self.pipelines[idx].workflow_rules.as_ref().map(|wf| {
+                collect_compare_refs(wf, &wf_vars, &mut compare_refs);
                 let ctx = EvalContext {
                     vars: &wf_vars,
                     exists: Some(&exists_checker),
-                    changes: None,
+                    changes: Some(&changes_checker),
                     source: &scenario.source,
                     ref_name: &ref_name,
                     is_tag,
+                    push_event,
                 };
                 evaluate_rules(wf, &ctx, &scenario.id, model::When::OnSuccess).outcome
             });
@@ -306,13 +344,15 @@ impl<'a> GraphBuilder<'a> {
                     continue;
                 }
                 let vars = self.trigger_vars(idx, &base);
+                collect_compare_refs(&j.rules, &vars, &mut compare_refs);
                 let ctx = EvalContext {
                     vars: &vars,
                     exists: Some(&exists_checker),
-                    changes: None,
+                    changes: Some(&changes_checker),
                     source: &scenario.source,
                     ref_name: &ref_name,
                     is_tag,
+                    push_event,
                 };
                 let mut eval = evaluate_rules(&j.rules, &ctx, &scenario.id, j.when);
                 match wf_outcome {
@@ -340,6 +380,12 @@ impl<'a> GraphBuilder<'a> {
                     eval.trace = Vec::new();
                 }
                 j.evaluations.push(eval);
+            }
+            if let Some(o) = &diff {
+                let own = !self.ctxs[idx].diff_inherited;
+                self.pipelines[idx].diff = o.to_model(own, &compare_refs);
+                let id = self.pipelines[idx].id.clone();
+                self.drain_oracle(o, &id);
             }
         }
     }
@@ -404,6 +450,14 @@ impl<'a> GraphBuilder<'a> {
             let p = &mut self.pipelines[dst];
             p.kind = PipelineKind::MultiProject;
             p.parent = Some((parent_id, job));
+            // Downstream of a trigger there is no push event: plain
+            // `changes:` clauses always match; `compare_to` still diffs.
+            self.ctxs[dst].push_event = false;
+            if let (Some(project), Some(tree)) =
+                (self.ctxs[dst].project.clone(), self.ctxs[dst].tree.clone())
+            {
+                self.ctxs[dst].diff = Some(DiffOracle::new(project, tree, None));
+            }
         }
 
         // Pass 2: depths follow the parent chains.
@@ -494,6 +548,13 @@ impl<'a> GraphBuilder<'a> {
                     depth: 0,
                     parent: None,
                     inputs: IndexMap::new(),
+                    diff: Some(DiffOracle::new(
+                        project.clone(),
+                        tree.clone(),
+                        self.opts.diff.as_ref(),
+                    )),
+                    diff_inherited: false,
+                    push_event: has_push_event(&scenario.source, scenario.is_tag),
                 };
                 let idx = self.add_pipeline(req, 0);
                 let id = self.pipelines[idx].id.clone();
@@ -706,6 +767,10 @@ impl<'a> GraphBuilder<'a> {
             depth,
             parent: Some((pid.clone(), base.to_string())),
             inputs,
+            // Child pipelines inherit the parent's diff and push event.
+            diff: self.ctxs[idx].diff.clone(),
+            diff_inherited: true,
+            push_event: self.ctxs[idx].push_event,
         };
         let new_idx = self.add_pipeline(req, child_depth);
         (
@@ -895,6 +960,9 @@ impl<'a> GraphBuilder<'a> {
             is_tag: false,
             vars: self.forwarded_vars(idx, base, forward),
         };
+        // A downstream pipeline has no push event; its oracle serves
+        // `compare_to` only.
+        let diff = DiffOracle::new(target.clone(), TreeRef::Commit(sha.clone()), None);
         let req = PipelineRequest {
             project: target,
             tree: TreeRef::Commit(sha),
@@ -908,6 +976,9 @@ impl<'a> GraphBuilder<'a> {
             depth,
             parent: Some((pid.clone(), base.to_string())),
             inputs: IndexMap::new(),
+            diff: Some(diff),
+            diff_inherited: false,
+            push_event: false,
         };
         let new_idx = self.add_pipeline(req, 0);
         let new_id = self.pipelines[new_idx].id.clone();
@@ -965,6 +1036,18 @@ fn parse_config_path(s: &str) -> ConfigPathSpec {
     }
 }
 
+/// Expanded `changes:compare_to` refs of a rules chain, first-seen order.
+fn collect_compare_refs(rules: &model::RulesSummary, vars: &VarTable, out: &mut Vec<String>) {
+    for c in &rules.rules {
+        if let Some(r) = &c.compare_to
+            && let Ok(r) = vars.expand_existing(r)
+            && !out.contains(&r)
+        {
+            out.push(r);
+        }
+    }
+}
+
 fn collect_yaml_vars(node: Option<&Node>, table: &mut VarTable) {
     let Some(map) = node.and_then(|n| n.untag().as_map()) else {
         return;
@@ -1010,6 +1093,7 @@ pub fn scan_entry(
         .unwrap_or_else(|| ".gitlab-ci.yml".to_string());
 
     let mut builder = GraphBuilder::new(opts, sources);
+    let diff = DiffOracle::new(entry_project.clone(), tree.clone(), opts.diff.as_ref());
     let req = PipelineRequest {
         project: entry_project,
         tree,
@@ -1023,6 +1107,9 @@ pub fn scan_entry(
         depth: 0,
         parent: None,
         inputs: IndexMap::new(),
+        diff: Some(diff),
+        diff_inherited: false,
+        push_event: has_push_event(&scenario.source, scenario.is_tag),
     };
     let root_idx = builder.add_pipeline(req, 0);
     let root_key = builder.visit_key(root_idx);
@@ -1110,6 +1197,7 @@ pub fn scan_all(
         if builder.visited.contains_key(&key) {
             continue; // already crawled as someone's downstream
         }
+        let diff = DiffOracle::new(project.clone(), tree.clone(), opts.diff.as_ref());
         let req = PipelineRequest {
             project: project.clone(),
             tree,
@@ -1123,6 +1211,9 @@ pub fn scan_all(
             depth: 0,
             parent: None,
             inputs: IndexMap::new(),
+            diff: Some(diff),
+            diff_inherited: false,
+            push_event: has_push_event(&scenario.source, scenario.is_tag),
         };
         let idx = builder.add_pipeline(req, 0);
         let id = builder.pipelines[idx].id.clone();

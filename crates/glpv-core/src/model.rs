@@ -118,6 +118,10 @@ pub struct Pipeline {
     pub config_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_branch: Option<String>,
+    /// The changed-file lists `rules:changes` was evaluated against (only
+    /// when a diff was supplied or a `compare_to` ref resolved).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<Diff>,
     #[serde(skip_serializing_if = "IndexMap::is_empty", default)]
     pub variables: IndexMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -134,6 +138,25 @@ pub struct Pipeline {
     pub depth: u32,
     /// Files merged into this pipeline's configuration, in merge order.
     pub includes: Vec<u32>,
+}
+
+/// Changed files of the event that would create a pipeline, plus the
+/// per-ref lists `rules:changes:compare_to` clauses diffed against.
+///
+/// `base`/`files` sit only on the pipeline that owns the diff (a root or
+/// detached pipeline scanned with `--diff`/`--changed-file`; `base` is absent
+/// for an explicit file list). Child pipelines inherit the parent's files
+/// (see `parent`) and carry only their own `compare_to` lists; multi-project
+/// pipelines have no push event and therefore no `files`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Diff {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<String>>,
+    /// Expanded `compare_to` ref → files changed since its merge base.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub compare_to: IndexMap<String, Vec<String>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -259,6 +282,12 @@ pub struct RuleClause {
     pub r#if: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub changes: Option<Vec<String>>,
+    /// `changes:compare_to` (unexpanded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compare_to: Option<String>,
+    /// `changes:regexp` (unexpanded); `changes` is then an empty list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changes_regexp: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exists: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]

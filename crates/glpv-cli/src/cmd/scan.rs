@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context;
+use glpv_core::diff::DiffSpec;
 use glpv_core::resolve::ResolveOpts;
 use glpv_core::scan::{ScanOutput, scan_entry, scan_file};
 use glpv_core::source::{ProjectKey, ProjectLocator, ProjectSource, TreeRef};
@@ -46,15 +47,29 @@ pub struct ScanArgs {
     /// Stop crawling after this many pipelines.
     #[arg(long, default_value_t = 200)]
     pub max_pipelines: u32,
+    /// Evaluate `rules:changes` against `git diff BASE...<ref>` (merge base)
+    /// in every root project.
+    #[arg(long, value_name = "BASE", conflicts_with = "changed_files")]
+    pub diff: Option<String>,
+    /// Evaluate `rules:changes` against this changed file (repeatable;
+    /// repository-relative).
+    #[arg(long = "changed-file", value_name = "PATH")]
+    pub changed_files: Vec<String>,
 }
 
 pub fn run(args: ScanArgs) -> anyhow::Result<()> {
     let scenario = args.scenario.to_scenario()?;
+    let diff = match (&args.diff, args.changed_files.is_empty()) {
+        (Some(base), _) => Some(DiffSpec::Base(base.clone())),
+        (None, false) => Some(DiffSpec::Files(args.changed_files.clone())),
+        (None, true) => None,
+    };
     let opts = ResolveOpts {
         embed_sources: !args.no_embed_sources,
         allow_remote: args.allow_remote,
         max_pipelines: args.max_pipelines,
         full_provenance: args.full_provenance,
+        diff,
         ..ResolveOpts::default()
     };
     let tool_args: Vec<String> = std::env::args().skip(1).collect();
@@ -102,6 +117,20 @@ pub fn run(args: ScanArgs) -> anyhow::Result<()> {
         graph.trigger_edges.len(),
         graph.diagnostics.len()
     );
+    match &opts.diff {
+        Some(DiffSpec::Base(base)) => {
+            let files = graph
+                .pipelines
+                .iter()
+                .find_map(|p| p.diff.as_ref().and_then(|d| d.files.as_ref()));
+            match files {
+                Some(f) => println!("diff vs {base}: {} changed file(s)", f.len()),
+                None => println!("diff vs {base}: unavailable (see diagnostics)"),
+            }
+        }
+        Some(DiffSpec::Files(f)) => println!("changed files: {} (explicit)", f.len()),
+        None => println!("no diff (changes: undecided; pass --diff <base>)"),
+    }
     super::print_diagnostics(graph);
     Ok(())
 }

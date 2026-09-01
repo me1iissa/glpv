@@ -19,6 +19,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use glpv_core::model::{JobEvaluation, Outcome, RulesSummary, When};
+use glpv_core::rules::changes::{ChangesMatch, ChangesQuery, has_push_event, match_changes};
 use glpv_core::rules::{EvalContext, evaluate_rules};
 use glpv_core::vars::{VarState, VarTable};
 
@@ -49,6 +50,21 @@ struct WPipeline {
     workflow_rules: Option<RulesSummary>,
     #[serde(default)]
     jobs: Vec<WJob>,
+    /// `(parent pipeline id, trigger job)` for downstream pipelines.
+    #[serde(default)]
+    parent: Option<(String, String)>,
+    #[serde(default)]
+    diff: Option<WDiff>,
+}
+
+/// `Pipeline.diff`: the push-event file list (root/detached pipelines that
+/// were scanned with a diff) and the per-ref `compare_to` lists.
+#[derive(Deserialize, Default)]
+struct WDiff {
+    #[serde(default)]
+    files: Option<Vec<String>>,
+    #[serde(default)]
+    compare_to: IndexMap<String, Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -82,9 +98,13 @@ struct Sim {
     /// When set, the full trace for this job id is included in the result.
     #[serde(default)]
     trace_job: Option<String>,
-    /// Simulation-wide assumption for `rules:changes` (None = undecided).
+    /// Simulation-wide assumption for `rules:changes` when no changed-file
+    /// list applies (None = undecided).
     #[serde(default)]
     assume_changes: Option<bool>,
+    /// Changed files overriding every pipeline's embedded diff.
+    #[serde(default)]
+    changed_files: Option<Vec<String>>,
     /// Simulation-wide assumption for `rules:exists` (None = undecided).
     #[serde(default)]
     assume_exists: Option<bool>,
@@ -201,11 +221,66 @@ fn pipeline_vars(p: &WPipeline, facts: &Facts, sim: &Sim) -> VarTable {
     t
 }
 
+fn is_child(p: &WPipeline) -> bool {
+    p.kind == "child" || p.kind == "dynamic_child"
+}
+
+fn parent_of<'a>(p: &WPipeline, by_id: &HashMap<&str, &'a WPipeline>) -> Option<&'a WPipeline> {
+    p.parent
+        .as_ref()
+        .and_then(|(pid, _)| by_id.get(pid.as_str()).copied())
+}
+
+/// The push-event changed files a pipeline's plain `changes:` clauses see:
+/// the simulation override, else the pipeline's own list, else — child
+/// pipelines inherit the parent's diff — the nearest ancestor's.
+fn effective_files<'a>(
+    p: &'a WPipeline,
+    by_id: &HashMap<&str, &'a WPipeline>,
+    sim: &'a Sim,
+) -> Option<&'a [String]> {
+    if let Some(f) = &sim.changed_files {
+        return Some(f);
+    }
+    let mut cur = p;
+    for _ in 0..64 {
+        if let Some(f) = cur.diff.as_ref().and_then(|d| d.files.as_ref()) {
+            return Some(f);
+        }
+        if !is_child(cur) {
+            return None;
+        }
+        cur = parent_of(cur, by_id)?;
+    }
+    None
+}
+
+/// Root and detached pipelines follow the simulated source; a child
+/// pipeline has a push event exactly when its parent has; multi-project
+/// (and unresolved) pipelines never do.
+fn push_event_of(p: &WPipeline, by_id: &HashMap<&str, &WPipeline>, sim: &Sim) -> bool {
+    let mut cur = p;
+    for _ in 0..64 {
+        if cur.kind == "root" || cur.kind == "detached" {
+            return has_push_event(&sim.source, sim.tag);
+        }
+        if !is_child(cur) {
+            return false;
+        }
+        match parent_of(cur, by_id) {
+            Some(parent) => cur = parent,
+            None => return false,
+        }
+    }
+    false
+}
+
 fn eval_all(g: &WGraph, sim: &Sim) -> Out {
     let mut out = Out {
         pipelines: HashMap::with_capacity(g.pipelines.len()),
         trace: None,
     };
+    let by_id: HashMap<&str, &WPipeline> = g.pipelines.iter().map(|p| (p.id.as_str(), p)).collect();
     // Traces are computed for the base of the requested job (siblings share).
     let trace_base: Option<(&str, String)> = sim.trace_job.as_deref().and_then(|id| {
         g.pipelines.iter().find_map(|p| {
@@ -219,16 +294,35 @@ fn eval_all(g: &WGraph, sim: &Sim) -> Out {
     for p in &g.pipelines {
         let facts = facts_of(p, sim);
         let pvars = pipeline_vars(p, &facts, sim);
-        let assume_changes = move |_: &[String]| sim.assume_changes;
+        let files = effective_files(p, &by_id, sim);
+        let push_event = push_event_of(p, &by_id, sim);
+        // A `compare_to` clause reads the pipeline's own per-ref list; a
+        // plain one the effective push-event list; without either, the
+        // simulation-wide assumption (or undecided).
+        let changes = move |q: &ChangesQuery<'_>| -> Option<ChangesMatch> {
+            let list: Option<&[String]> = match q.compare_to {
+                Some(r) => p
+                    .diff
+                    .as_ref()
+                    .and_then(|d| d.compare_to.get(r))
+                    .map(|v| v.as_slice()),
+                None => files,
+            };
+            match list {
+                Some(l) => Some(match_changes(q.patterns, l)),
+                None => sim.assume_changes.map(ChangesMatch::Assumed),
+            }
+        };
         let assume_exists = move |_: &[String]| sim.assume_exists;
         let wf_outcome = p.workflow_rules.as_ref().map(|wf| {
             let ctx = EvalContext {
                 vars: &pvars,
                 exists: Some(&assume_exists),
-                changes: Some(&assume_changes),
+                changes: Some(&changes),
                 source: &facts.source,
                 ref_name: &facts.ref_name,
                 is_tag: facts.is_tag,
+                push_event,
             };
             evaluate_rules(wf, &ctx, "sim", When::OnSuccess).outcome
         });
@@ -256,10 +350,11 @@ fn eval_all(g: &WGraph, sim: &Sim) -> Out {
             let ctx = EvalContext {
                 vars: &vars,
                 exists: Some(&assume_exists),
-                changes: Some(&assume_changes),
+                changes: Some(&changes),
                 source: &facts.source,
                 ref_name: &facts.ref_name,
                 is_tag: facts.is_tag,
+                push_event,
             };
             let mut eval = evaluate_rules(&j.rules, &ctx, "sim", j.when);
             match wf_outcome {
@@ -397,6 +492,7 @@ mod tests {
             trace_job: Some("p-1/build".into()),
             assume_changes: None,
             assume_exists: None,
+            changed_files: None,
         };
         let out = eval_all(&g, &sim);
         assert_eq!(out.pipelines["p-1"]["build"].0, Outcome::Runs);
@@ -408,5 +504,107 @@ mod tests {
         };
         let out2 = eval_all(&g, &sim2);
         assert_eq!(out2.pipelines["p-1"]["build"].0, Outcome::Skipped);
+    }
+
+    #[test]
+    fn changes_decided_by_embedded_diff() {
+        let span = serde_json::json!({"file": 0, "start": [1, 1], "end": [1, 1]});
+        let graph = serde_json::json!({
+            "pipelines": [{
+                "id": "p-1", "kind": "root",
+                "project": {"host": "example.com", "path": "grp/app"},
+                "git_ref": "main", "default_branch": "main", "config_path": ".gitlab-ci.yml",
+                "diff": {
+                    "base": "origin/main",
+                    "files": ["src/a.rs"],
+                    "compare_to": {"release": ["src/b.rs"]}
+                },
+                "jobs": [
+                    {"id": "p-1/build", "name": "build", "when": "on_success",
+                     "rules": {"mode": "conditional", "rules": [
+                        {"changes": ["src/**/*"], "span": span}]}},
+                    {"id": "p-1/docs", "name": "docs", "when": "on_success",
+                     "rules": {"mode": "conditional", "rules": [
+                        {"changes": ["docs/**/*"], "compare_to": "release", "span": span}]}}
+                ]
+            }, {
+                "id": "p-2", "kind": "child", "parent": ["p-1", "trigger-child"],
+                "project": {"host": "example.com", "path": "grp/app"},
+                "git_ref": "main", "default_branch": "main",
+                "config_path": "trigger:include via trigger-child",
+                "jobs": [{"id": "p-2/child-build", "name": "child-build", "when": "on_success",
+                          "rules": {"mode": "conditional", "rules": [
+                             {"changes": ["src/**/*"], "span": span}]}}]
+            }, {
+                "id": "p-3", "kind": "multi_project", "parent": ["p-1", "trigger-down"],
+                "project": {"host": "example.com", "path": "grp/other"},
+                "git_ref": "main", "default_branch": "main", "config_path": ".gitlab-ci.yml",
+                "jobs": [{"id": "p-3/down", "name": "down", "when": "on_success",
+                          "rules": {"mode": "conditional", "rules": [
+                             {"changes": ["nothing/*"], "span": span}]}}]
+            }]
+        });
+        let g: WGraph = serde_json::from_value(graph).unwrap();
+        let sim = Sim {
+            source: "push".into(),
+            git_ref: String::new(),
+            tag: false,
+            vars: vec![],
+            trace_job: Some("p-1/build".into()),
+            assume_changes: None,
+            assume_exists: None,
+            changed_files: None,
+        };
+        let out = eval_all(&g, &sim);
+        assert_eq!(out.pipelines["p-1"]["build"].0, Outcome::Runs);
+        assert_eq!(out.pipelines["p-1"]["docs"].0, Outcome::Skipped);
+        // Children inherit the parent's diff; downstream has no push event.
+        assert_eq!(out.pipelines["p-2"]["child-build"].0, Outcome::Runs);
+        assert_eq!(out.pipelines["p-3"]["down"].0, Outcome::Runs);
+        let trace = out.trace.unwrap();
+        assert_eq!(
+            trace.trace[0].note.as_deref(),
+            Some("changes: matched by src/a.rs")
+        );
+
+        // An explicit list overrides the embedded files (not compare_to).
+        let out = eval_all(
+            &g,
+            &Sim {
+                changed_files: Some(vec!["docs/x.md".into()]),
+                trace_job: None,
+                ..Sim {
+                    source: "push".into(),
+                    git_ref: String::new(),
+                    tag: false,
+                    vars: vec![],
+                    trace_job: None,
+                    assume_changes: None,
+                    assume_exists: None,
+                    changed_files: None,
+                }
+            },
+        );
+        assert_eq!(out.pipelines["p-1"]["build"].0, Outcome::Skipped);
+        assert_eq!(out.pipelines["p-1"]["docs"].0, Outcome::Skipped);
+        assert_eq!(out.pipelines["p-2"]["child-build"].0, Outcome::Skipped);
+
+        // No push event: plain clauses match, compare_to still diffs.
+        let out = eval_all(
+            &g,
+            &Sim {
+                source: "schedule".into(),
+                git_ref: String::new(),
+                tag: false,
+                vars: vec![],
+                trace_job: None,
+                assume_changes: None,
+                assume_exists: None,
+                changed_files: Some(vec!["docs/x.md".into()]),
+            },
+        );
+        assert_eq!(out.pipelines["p-1"]["build"].0, Outcome::Runs);
+        assert_eq!(out.pipelines["p-1"]["docs"].0, Outcome::Skipped);
+        assert_eq!(out.pipelines["p-2"]["child-build"].0, Outcome::Runs);
     }
 }

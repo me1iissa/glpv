@@ -92,6 +92,70 @@ impl VarTable {
             Err(missing)
         }
     }
+
+    /// GitLab's `ExpandVariables.expand_existing`: like [`expand`](Self::expand)
+    /// but a reference to a variable that does not exist stays literal
+    /// (`$NAME` / `${NAME}`). Only `Unknown` variables — whose existence a
+    /// static crawl cannot tell — make this fail, with their names.
+    pub fn expand_existing(&self, text: &str) -> Result<String, Vec<String>> {
+        let mut out = String::with_capacity(text.len());
+        let mut unknown = Vec::new();
+        let bytes = text.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'$' {
+                if i + 1 < bytes.len() && bytes[i + 1] == b'$' {
+                    out.push('$');
+                    i += 2;
+                    continue;
+                }
+                let (name, next) = if i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+                    match text[i + 2..].find('}') {
+                        Some(end) => (&text[i + 2..i + 2 + end], i + 2 + end + 1),
+                        None => {
+                            out.push('$');
+                            i += 1;
+                            continue;
+                        }
+                    }
+                } else {
+                    let start = i + 1;
+                    let mut end = start;
+                    while end < bytes.len()
+                        && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_')
+                    {
+                        end += 1;
+                    }
+                    (&text[start..end], end)
+                };
+                if name.is_empty() {
+                    out.push('$');
+                    i += 1;
+                    continue;
+                }
+                match self.get(name) {
+                    VarState::Known(v) => out.push_str(&v),
+                    VarState::Unset => out.push_str(&text[i..next]),
+                    VarState::Unknown => {
+                        if !unknown.iter().any(|n| n == name) {
+                            unknown.push(name.to_string());
+                        }
+                        out.push_str(&text[i..next]);
+                    }
+                }
+                i = next;
+            } else {
+                let ch = text[i..].chars().next().unwrap();
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+        }
+        if unknown.is_empty() {
+            Ok(out)
+        } else {
+            Err(unknown)
+        }
+    }
 }
 
 /// A pipeline scenario: what kind of pipeline we are pretending to run.
@@ -212,6 +276,21 @@ mod tests {
         assert_eq!(t.expand("$B"), Err(vec!["B".to_string()]));
         assert_eq!(t.expand("$UNKNOWN"), Err(vec!["UNKNOWN".to_string()]));
         assert_eq!(t.expand("$ alone"), Ok("$ alone".to_string()));
+    }
+
+    #[test]
+    fn expansion_of_existing_only() {
+        let mut t = VarTable::default();
+        t.set_known("A", "x");
+        t.set("B", VarState::Unset);
+        assert_eq!(t.expand_existing("$A/file"), Ok("x/file".to_string()));
+        assert_eq!(t.expand_existing("${B}/y"), Ok("${B}/y".to_string()));
+        assert_eq!(t.expand_existing("$B/$A"), Ok("$B/x".to_string()));
+        assert_eq!(t.expand_existing("$$A"), Ok("$A".to_string()));
+        assert_eq!(
+            t.expand_existing("$UNKNOWN/$A/$UNKNOWN"),
+            Err(vec!["UNKNOWN".to_string()])
+        );
     }
 
     #[test]

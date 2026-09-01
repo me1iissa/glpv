@@ -82,6 +82,18 @@ pub trait ProjectSource: Send + Sync {
     /// Recursive file listing of the tree, in `git ls-tree` order.
     fn list_tree(&self, at: &TreeRef) -> Result<Arc<[String]>, SourceError>;
     fn tags(&self) -> Result<Vec<String>, SourceError>;
+    /// Paths changed between the merge base of `base` and `head` — GitLab's
+    /// push diff: no rename detection (a rename is its old and new path) and,
+    /// for the working tree, uncommitted and untracked files included.
+    /// `Ok(None)` when `base` does not resolve or shares no history with `head`.
+    fn changed_files(
+        &self,
+        base: &str,
+        head: &TreeRef,
+    ) -> Result<Option<Arc<[String]>>, SourceError> {
+        let _ = (base, head);
+        Ok(None)
+    }
 }
 
 pub trait ProjectLocator: Send + Sync {

@@ -1,0 +1,42 @@
+---
+source: crates/glpv-cli/tests/snapshots.rs
+expression: "glpv_render::render_dot(&output.graph)"
+---
+digraph glpv {
+  rankdir=LR;
+  compound=true;
+  newrank=true;
+  graph [fontname="Helvetica"];
+  node [shape=box style="rounded,filled" fillcolor="#f6f8fa" fontname="Helvetica" fontsize=10];
+  edge [fontname="Helvetica" fontsize=9];
+
+  subgraph "cluster_p_d306fc36ffd52941" {
+    label="fixtures.local/fx/changes @ main — .gitlab-ci.yml";
+    style="rounded,filled"; fillcolor="#ffffff"; color="#8250df"; fontsize=11;
+    subgraph "cluster_p_d306fc36ffd52941_s1" {
+      label="build"; rank=same; style=dashed; color="#d0d7de"; fontsize=10;
+      "p-d306fc36ffd52941/build" [label="build" fillcolor="#fff8c5" tooltip="stage: build"];
+    }
+    subgraph "cluster_p_d306fc36ffd52941_s2" {
+      label="docs"; rank=same; style=dashed; color="#d0d7de"; fontsize=10;
+      "p-d306fc36ffd52941/docs-extra" [label="docs-extra" tooltip="stage: docs"];
+      "p-d306fc36ffd52941/docs" [label="docs" fillcolor="#fff8c5" tooltip="stage: docs"];
+      "p-d306fc36ffd52941/docs-vs-release" [label="docs-vs-release" fillcolor="#fff8c5" tooltip="stage: docs"];
+      "p-d306fc36ffd52941/bare-star" [label="bare-star" fillcolor="#fff8c5" tooltip="stage: docs"];
+    }
+    "p-d306fc36ffd52941/build" -> "p-d306fc36ffd52941/docs-extra" [style=invis weight=100];
+    subgraph "cluster_p_d306fc36ffd52941_s3" {
+      label="check"; rank=same; style=dashed; color="#d0d7de"; fontsize=10;
+      "p-d306fc36ffd52941/lint-yaml" [label="lint-yaml" fillcolor="#fff8c5" tooltip="stage: check"];
+      "p-d306fc36ffd52941/never-first" [label="never-first" fillcolor="#fff8c5" tooltip="stage: check"];
+      "p-d306fc36ffd52941/qmark" [label="qmark" fillcolor="#fff8c5" tooltip="stage: check"];
+      "p-d306fc36ffd52941/class" [label="class" fillcolor="#fff8c5" tooltip="stage: check"];
+      "p-d306fc36ffd52941/dotmatch" [label="dotmatch" fillcolor="#fff8c5" tooltip="stage: check"];
+      "p-d306fc36ffd52941/slash" [label="slash" fillcolor="#fff8c5" tooltip="stage: check"];
+      "p-d306fc36ffd52941/var-pattern" [label="var-pattern" fillcolor="#fff8c5" tooltip="stage: check"];
+      "p-d306fc36ffd52941/unknown-var" [label="unknown-var" fillcolor="#fff8c5" tooltip="stage: check"];
+    }
+    "p-d306fc36ffd52941/docs-extra" -> "p-d306fc36ffd52941/lint-yaml" [style=invis weight=100];
+  }
+
+}

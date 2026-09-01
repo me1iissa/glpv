@@ -10,11 +10,15 @@ use std::sync::Mutex;
 
 use super::{ProjectKey, ProjectMeta, ProjectOrigin, ProjectSource, Sha, SourceError, TreeRef};
 
+/// `(base, head)` → changed files (`None` = base unresolvable).
+type DiffCacheEntry = ((String, TreeRef), Option<std::sync::Arc<[String]>>);
+
 pub struct LocalGitProject {
     meta: ProjectMeta,
     root: PathBuf,
     override_default_branch: Option<String>,
     tree_cache: Mutex<Vec<(TreeRef, std::sync::Arc<[String]>)>>,
+    diff_cache: Mutex<Vec<DiffCacheEntry>>,
 }
 
 impl LocalGitProject {
@@ -62,6 +66,7 @@ impl LocalGitProject {
             root,
             override_default_branch: None,
             tree_cache: Mutex::new(Vec::new()),
+            diff_cache: Mutex::new(Vec::new()),
         })
     }
 
@@ -91,6 +96,54 @@ impl LocalGitProject {
 
     fn git(&self, args: &[&str]) -> Result<Option<String>, SourceError> {
         git_str(&self.root, args)
+    }
+
+    fn compute_changed_files(
+        &self,
+        base: &str,
+        head: &TreeRef,
+    ) -> Result<Option<std::sync::Arc<[String]>>, SourceError> {
+        let Some(base_sha) = self.resolve_ref(base)? else {
+            return Ok(None);
+        };
+        let nul_split = |s: String| -> Vec<String> {
+            s.split('\0')
+                .filter(|p| !p.is_empty())
+                .map(|p| p.to_string())
+                .collect()
+        };
+        let mut files: Vec<String> = Vec::new();
+        match head {
+            TreeRef::Commit(sha) => {
+                // Three-dot: the merge base of both, like a branch push / MR diff.
+                let range = format!("{}...{}", base_sha.0, sha.0);
+                let Some(out) = self.git(&["diff", "--name-only", "--no-renames", "-z", &range])?
+                else {
+                    return Ok(None);
+                };
+                files.extend(nul_split(out));
+            }
+            TreeRef::Worktree => {
+                let merge_base = self
+                    .git(&["merge-base", &base_sha.0, "HEAD"])?
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or(base_sha.0);
+                let Some(out) =
+                    self.git(&["diff", "--name-only", "--no-renames", "-z", &merge_base])?
+                else {
+                    return Ok(None);
+                };
+                files.extend(nul_split(out));
+                // Untracked-but-not-ignored files count as added, consistent
+                // with `list_tree` for the working tree.
+                if let Some(out) =
+                    self.git(&["ls-files", "--others", "--exclude-standard", "-z"])?
+                {
+                    files.extend(nul_split(out));
+                }
+            }
+        }
+        Ok(Some(files.into()))
     }
 }
 
@@ -197,6 +250,23 @@ impl ProjectSource for LocalGitProject {
             .map(|l| l.to_string())
             .collect())
     }
+
+    fn changed_files(
+        &self,
+        base: &str,
+        head: &TreeRef,
+    ) -> Result<Option<std::sync::Arc<[String]>>, SourceError> {
+        let key = (base.to_string(), head.clone());
+        {
+            let cache = self.diff_cache.lock().unwrap();
+            if let Some((_, v)) = cache.iter().find(|(k, _)| *k == key) {
+                return Ok(v.clone());
+            }
+        }
+        let result = self.compute_changed_files(base, head)?;
+        self.diff_cache.lock().unwrap().push((key, result.clone()));
+        Ok(result)
+    }
 }
 
 /// Run git in `dir`; `Ok(None)` for a clean non-zero exit (missing ref/file),
@@ -270,6 +340,81 @@ pub fn parse_remote_url(url: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::parse_remote_url;
+    use super::*;
+
+    fn run(dir: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[test]
+    fn changed_files_is_the_push_diff() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        run(dir, &["init", "-q", "-b", "main"]);
+        run(dir, &["config", "commit.gpgsign", "false"]);
+        for f in ["a.txt", "b.txt", "c.txt"] {
+            std::fs::write(dir.join(f), f).unwrap();
+        }
+        run(dir, &["add", "-A"]);
+        run(dir, &["commit", "-q", "-m", "one"]);
+        run(dir, &["tag", "base"]);
+        // Diverging side branch: the merge base, not the tip, must be used.
+        run(dir, &["checkout", "-q", "-b", "side"]);
+        std::fs::write(dir.join("side.txt"), "s").unwrap();
+        run(dir, &["add", "-A"]);
+        run(dir, &["commit", "-q", "-m", "side"]);
+        run(dir, &["checkout", "-q", "main"]);
+        std::fs::write(dir.join("a.txt"), "changed").unwrap();
+        run(dir, &["mv", "b.txt", "d.txt"]);
+        std::fs::write(dir.join("e.txt"), "new").unwrap();
+        run(dir, &["add", "-A"]);
+        run(dir, &["commit", "-q", "-m", "two"]);
+        std::fs::write(dir.join("untracked.txt"), "u").unwrap();
+
+        let project = LocalGitProject::open(dir).unwrap();
+        let head = project.resolve_ref("main").unwrap().unwrap();
+
+        let committed = project
+            .changed_files("side", &TreeRef::Commit(head.clone()))
+            .unwrap()
+            .expect("side resolves");
+        assert_eq!(&*committed, &["a.txt", "b.txt", "d.txt", "e.txt"]);
+        let vs_tag = project
+            .changed_files("base", &TreeRef::Commit(head))
+            .unwrap()
+            .unwrap();
+        assert_eq!(&*vs_tag, &["a.txt", "b.txt", "d.txt", "e.txt"]);
+
+        let worktree = project
+            .changed_files("side", &TreeRef::Worktree)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            &*worktree,
+            &["a.txt", "b.txt", "d.txt", "e.txt", "untracked.txt"]
+        );
+
+        assert!(
+            project
+                .changed_files("no-such-ref", &TreeRef::Worktree)
+                .unwrap()
+                .is_none()
+        );
+    }
 
     #[test]
     fn remote_urls() {

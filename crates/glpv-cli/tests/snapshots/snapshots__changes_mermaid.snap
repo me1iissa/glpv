@@ -1,0 +1,80 @@
+---
+source: crates/glpv-cli/tests/snapshots.rs
+expression: mermaid
+---
+### overview.mmd
+flowchart LR
+    subgraph prj0["fixtures.local/fx/changes"]
+        direction TB
+        ov0["pipeline @ main (13 jobs)"]
+    end
+
+### combined.mmd
+flowchart LR
+    subgraph prj0["fixtures.local/fx/changes"]
+        direction LR
+        subgraph prj0p0["pipeline @ main — .gitlab-ci.yml"]
+            direction LR
+            subgraph prj0p0s1["build"]
+                direction TB
+                n0(["build"])
+            end
+            subgraph prj0p0s2["docs"]
+                direction TB
+                n1["docs-extra"]
+                n2(["docs"])
+                n3(["docs-vs-release"])
+                n4(["bare-star"])
+            end
+            subgraph prj0p0s3["check"]
+                direction TB
+                n5(["lint-yaml"])
+                n6(["never-first"])
+                n7(["qmark"])
+                n8(["class"])
+                n9(["dotmatch"])
+                n10(["slash"])
+                n11(["var-pattern"])
+                n12(["unknown-var"])
+            end
+        end
+    end
+
+### p-d306fc36ffd52941.mmd
+flowchart LR
+    %% fixtures.local/fx/changes @ main — .gitlab-ci.yml
+    %% n0 = docs-extra
+    %% n1 = build
+    %% n2 = docs
+    %% n3 = lint-yaml
+    %% n4 = never-first
+    %% n5 = docs-vs-release
+    %% n6 = qmark
+    %% n7 = class
+    %% n8 = dotmatch
+    %% n9 = slash
+    %% n10 = var-pattern
+    %% n11 = unknown-var
+    %% n12 = bare-star
+    subgraph s1["build"]
+        direction TB
+        n1(["build"])
+    end
+    subgraph s2["docs"]
+        direction TB
+        n0["docs-extra"]
+        n2(["docs"])
+        n5(["docs-vs-release"])
+        n12(["bare-star"])
+    end
+    subgraph s3["check"]
+        direction TB
+        n3(["lint-yaml"])
+        n4(["never-first"])
+        n6(["qmark"])
+        n7(["class"])
+        n8(["dotmatch"])
+        n9(["slash"])
+        n10(["var-pattern"])
+        n11(["unknown-var"])
+    end

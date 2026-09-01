@@ -44,6 +44,8 @@ pub fn run(args: ResolveArgs) -> anyhow::Result<()> {
         full_provenance: false,
         allow_remote: false,
         max_pipelines: 1,
+        diff: None,
+        changed_files: vec![],
     };
     let output = super::scan::run_scan(&scan_args, &scenario, &opts, vec![])?;
 

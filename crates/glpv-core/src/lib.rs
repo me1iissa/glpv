@@ -5,6 +5,7 @@
 //! `gitlab-org/gitlab` implementation).
 
 pub mod config;
+pub mod diff;
 pub mod glob;
 pub mod model;
 pub mod resolve;

@@ -1,0 +1,164 @@
+# Fixture: rules:changes against a real diff. Three commits so that
+# `--diff v1` (the tag on the first commit) and `compare_to: release` (the
+# branch on the second) see different file sets:
+#   v1 ... main   : docs/sub/x.md, src/util/helpers.rs, src/main.rs,
+#                   scripts/build.sh, .hidden/config
+#   release ... main : src/main.rs, scripts/build.sh, .hidden/config
+# Jobs cover the fnmatch dialect (segment-bound `*`, `**/`, `?`, classes,
+# braces, hidden files, a leading `/` that never matches), variables in
+# patterns, `compare_to`, a `when: never` clause and `include:rules:changes`.
+
+dir = "changes-repo"
+remote = "git@fixtures.local:fx/changes.git"
+default_branch = "main"
+
+[[commits]]
+message = "ci and sources"
+tags = ["v1"]
+
+[commits.files]
+".gitlab-ci.yml" = '''
+workflow:
+  rules:
+    - if: $CI_COMMIT_TAG
+      when: always
+    - changes: ["*.txt"]
+      when: never
+    - when: always
+
+stages: [build, docs, check]
+
+include:
+  - local: ci/docs.yml
+    rules:
+      - changes: ["docs/**/*"]
+  - local: ci/never.yml
+    rules:
+      - changes: ["nothing/**/*"]
+
+build:
+  stage: build
+  script: [cargo build]
+  rules:
+    - changes: ["src/**/*"]
+
+docs:
+  stage: docs
+  script: [mkdocs build]
+  rules:
+    - changes: ["docs/**/*.{md,rst}"]
+
+lint-yaml:
+  stage: check
+  script: [yamllint .]
+  rules:
+    - changes: ["**/*.{yml,yaml}{,.*}"]
+
+never-first:
+  stage: check
+  script: [echo never-first]
+  rules:
+    - changes: ["scripts/*"]
+      when: never
+    - when: on_success
+
+docs-vs-release:
+  stage: docs
+  script: [echo docs-vs-release]
+  rules:
+    - changes:
+        paths: ["docs/**/*"]
+        compare_to: release
+
+qmark:
+  stage: check
+  script: [echo qmark]
+  rules:
+    - changes: ["src/main.??"]
+
+class:
+  stage: check
+  script: [echo class]
+  rules:
+    - changes: ["scripts/[a-c]*.sh"]
+
+dotmatch:
+  stage: check
+  script: [echo dotmatch]
+  rules:
+    - changes: ["**/config"]
+
+slash:
+  stage: check
+  script: [echo slash]
+  rules:
+    - changes: ["/src/main.rs"]
+
+var-pattern:
+  stage: check
+  variables:
+    SRC_DIR: src
+  script: [echo var-pattern]
+  rules:
+    - changes: ["$SRC_DIR/**/*"]
+
+unknown-var:
+  stage: check
+  script: [echo unknown-var]
+  rules:
+    - changes: ["$UNKNOWN_DIR/**/*"]
+
+bare-star:
+  stage: docs
+  script: [echo bare-star]
+  rules:
+    - changes: ["docs/**"]
+'''
+"ci/docs.yml" = '''
+docs-extra:
+  stage: docs
+  script: [echo docs-extra]
+'''
+"ci/never.yml" = '''
+never-included:
+  stage: check
+  script: [echo never-included]
+'''
+"src/main.rs" = '''
+fn main() {}
+'''
+"docs/index.md" = '''
+# Index
+'''
+"docs/sub/x.md" = '''
+# X
+'''
+
+[[commits]]
+message = "docs and helpers"
+branch = "release"
+
+[commits.files]
+"docs/sub/x.md" = '''
+# X (revised)
+'''
+"src/util/helpers.rs" = '''
+pub fn help() {}
+'''
+
+[[commits]]
+message = "main, build script, hidden config"
+
+[commits.files]
+"src/main.rs" = '''
+fn main() {
+    println!("hi");
+}
+'''
+"scripts/build.sh" = '''
+#!/bin/sh
+cargo build
+'''
+".hidden/config" = '''
+key = value
+'''
