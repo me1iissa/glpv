@@ -426,7 +426,7 @@ dependencies = [
 
 [[package]]
 name = "glpv-cli"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -445,7 +445,7 @@ dependencies = [
 
 [[package]]
 name = "glpv-core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "glpv-yaml",
@@ -466,7 +466,7 @@ dependencies = [
 
 [[package]]
 name = "glpv-render"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "glpv-core",
  "serde_json",
@@ -474,7 +474,7 @@ dependencies = [
 
 [[package]]
 name = "glpv-wasm"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "glpv-core",
  "indexmap",
@@ -484,7 +484,7 @@ dependencies = [
 
 [[package]]
 name = "glpv-yaml"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "indexmap",
  "insta",

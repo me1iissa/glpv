@@ -5,6 +5,31 @@ from the commit history; each tagged section is also the body of that
 version's GitHub Release.
 
 
+## [0.3.0] — 2026-09-01
+
+### Features
+
+- Glpv check — the oracle against the server's lint API
+- Glpv serve — live map that rescans on change and reloads open viewers
+- Rules:variables and trigger:forward in all three evaluators
+- Evaluate legacy only/except variables, changes and kubernetes
+- **api:** Read uncloned projects through the GitLab REST API
+- Spec:inputs per pipeline, --input, needs and allow_failure in the panel
+
+### Bug fixes
+
+- **serve:** Ignore access events so a rescan does not retrigger itself
+
+### Testing
+
+- Mutate the synthetic check oracle structurally
+
+### CI and build
+
+- Parity suite against a fresh wasm build; scheduled corpus regression job
+- Ci, docs: MSRV job, release assets, viewer guide; drop dead viewer code
+
+
 ## [0.2.1] — 2026-09-01
 
 ### CI and build
