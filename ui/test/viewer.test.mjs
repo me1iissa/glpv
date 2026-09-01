@@ -85,8 +85,11 @@ for (const sample of SAMPLES) {
       test("scene statistics are consistent with the graph", () => {
         const { scene } = glpv;
         assert.equal(scene.cards.length, G.pipelines.length, "one card per pipeline");
+        // a job whose stage is not declared (stage.unknown diagnostic) has no column
         let bases = 0;
-        for (const p of G.pipelines) bases += new Set(p.jobs.map((j) => j.base_name || j.name)).size;
+        for (const p of G.pipelines) {
+          bases += new Set(p.jobs.filter((j) => p.stages.includes(j.stage)).map((j) => j.base_name || j.name)).size;
+        }
         assert.equal(scene.pills.length, bases, "one pill per base job");
         assert.equal(scene.pillByJob.size, bases);
         assert.equal(
@@ -163,11 +166,41 @@ for (const sample of SAMPLES) {
         test("enable in simulation: decides a changes/exists gate", () => {
           const id = jobId(G, "fx/sim", "infra-apply");
           glpv.selectJob(id);
+          // the sample was scanned with an explicit changed-file list, so the
+          // changes clause is already decided (no match) and only exists: is open
           assert.equal(glpv.lastEval().jobEval.get(id).outcome, "unknown");
+          // the checklist explains the deciding clause: the changes clause was
+          // decided (no match against the scanned list), so exists: is the gate
+          const terms = [...glpv.panel.querySelectorAll(".t-txt")].map((e) => e.textContent);
+          assert.ok(terms.some((t) => t.startsWith("exists: [terraform/*.tf]")), terms.join(" | "));
+          assert.ok(!terms.some((t) => t.startsWith("changes:")), terms.join(" | "));
           clickExplore(glpv.panel, "⚡ Enable in simulation");
           const ev = glpv.lastEval().jobEval.get(id);
           assert.ok(ev.outcome === "runs" || ev.outcome === "manual", ev.outcome);
-          assert.notEqual(glpv.sim.assumeChanges === null && glpv.sim.assumeExists === null, true, "an assumption was set");
+          // either an assumption was set, or the finder left the push event
+          // behind (no push event ⇒ changes: always matches)
+          assert.ok(
+            glpv.sim.assumeExists !== null || glpv.sim.assumeChanges !== null || glpv.sim.source !== "push",
+            JSON.stringify({ src: glpv.sim.source, ac: glpv.sim.assumeChanges, ae: glpv.sim.assumeExists }),
+          );
+          clean();
+        });
+
+        test("an explicit changed-file list decides changes: clauses and disables the assumption", () => {
+          glpv.state.apply({ v: 1 });
+          const id = jobId(G, "fx/sim", "infra-apply");
+          const chSel = glpv.simbar.querySelector('select[data-assume="changes"]');
+          assert.equal(chSel.disabled, true, "a scanned list is in force");
+          const box = glpv.simbar.querySelector('textarea[data-sim="changed-files"]');
+          box.value = "infra/main.tf";
+          box.dispatchEvent(new window.Event("input", { bubbles: true }));
+          assert.deepEqual(JSON.parse(JSON.stringify(glpv.sim.changedFiles)), ["infra/main.tf"]);
+          assert.equal(glpv.lastEval().jobEval.get(id).outcome, "runs");
+          assert.deepEqual(JSON.parse(JSON.stringify(glpv.state.current().cf)), ["infra/main.tf"]);
+          box.value = "";
+          box.dispatchEvent(new window.Event("input", { bubbles: true }));
+          assert.equal(glpv.sim.changedFiles, null);
+          assert.equal(glpv.lastEval().jobEval.get(id).outcome, "unknown");
           clean();
         });
 

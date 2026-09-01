@@ -33,7 +33,14 @@ independently.
   `changes:` clauses always match.
 - `include:rules:changes` is decided the same way, against the root's diff.
 - The wasm evaluator reads the embedded diff and takes a `changed_files`
-  override for the viewer's simulation.
+  override for the viewer's simulation; the viewer's JS mirror implements the
+  same matching, and the two are held equal by the parity test.
+- Viewer: a "changed files" list in the sim bar (prefilled from the scanned
+  diff, editable as an override that also travels in the URL as `cf`); the
+  panel checklist shows each `changes:` clause's verdict ("matched by …",
+  "no match in N changed file(s)", "no push event …"); the assumption select
+  is disabled while a list is in force, and the outcome explorer / scenario
+  finder no longer branch on a decided clause.
 
 Leftovers: `changes: {regexp: …}` is parsed but only decided by an empty
 diff; legacy `only:changes`/`except:changes` stay *unknown*; a new-branch

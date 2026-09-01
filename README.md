@@ -38,7 +38,9 @@ Progress against the six-milestone plan:
   embedded source) and effective YAML; job/pipeline/stage search (`/`) and
   shareable links (the simulation, selection, edge mode and camera live in
   the URL hash — "copy link"); an optional "stack children" toggle folds runs
-  of near-identical child pipelines into one expandable card.
+  of near-identical child pipelines into one expandable card; a "changed
+  files" list in the sim bar (prefilled from a `--diff`/`--changed-file` scan)
+  decides `rules:changes` clauses per pipeline instead of a global assumption.
 - [x] **M4 (rules engine)** — GitLab-faithful `rules:if` evaluator (Ruby value
   semantics, RE2 regexes, three-valued with `unknown`), `workflow:rules`
   gating, legacy only/except refs, per-job traces in the graph JSON — and a

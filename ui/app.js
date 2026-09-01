@@ -51,6 +51,7 @@ const sim = {
   vars: [], // [key, value]; the value "(unset)" simulates an unset variable
   assumeChanges: null, // simulation-wide rules:changes assumption
   assumeExists: null, // simulation-wide rules:exists assumption
+  changedFiles: null, // explicit changed-file list; overrides every pipeline's scanned diff
 };
 
 /* ================= graph-wide evaluation ================= */
@@ -2392,6 +2393,7 @@ function currentState() {
   if (vars.length) st.vars = vars.map((v) => [v[0], v[1]]);
   if (sim.assumeChanges !== null) st.ac = sim.assumeChanges;
   if (sim.assumeExists !== null) st.ae = sim.assumeExists;
+  if (sim.changedFiles) st.cf = sim.changedFiles;
   if (selectedJob) st.sel = selectedJob;
   if (edgeMode !== "focus") st.mode = edgeMode;
   if (stackMode) st.stk = 1;
@@ -2439,6 +2441,8 @@ function applyState(st) {
     : [];
   sim.assumeChanges = st.ac === true || st.ac === false ? st.ac : null;
   sim.assumeExists = st.ae === true || st.ae === false ? st.ae : null;
+  const cf = Array.isArray(st.cf) ? st.cf.filter((f) => typeof f === "string" && f).slice(0, 5000) : [];
+  sim.changedFiles = cf.length ? cf : null;
   if (refreshSimBarFn) refreshSimBarFn();
   setEdgeMode(st.mode === "all" || st.mode === "triggers" ? st.mode : "focus");
   const wantStack = st.stk === 1 || st.stk === true;
@@ -2708,6 +2712,9 @@ function buildSimbar() {
     applyEval();
   };
 
+  const assumeTitle = (name) =>
+    "simulation-wide assumption for rules:" + name +
+    " — the crawl cannot see the diff/tree, so these clauses are undecided unless you pick a side";
   const mkAssume = (name, get, set) => {
     const sel = document.createElement("select");
     for (const [v, label] of [
@@ -2720,9 +2727,7 @@ function buildSimbar() {
       o.textContent = label;
       sel.appendChild(o);
     }
-    sel.title =
-      "simulation-wide assumption for rules:" + name +
-      " — the crawl cannot see the diff/tree, so these clauses are undecided unless you pick a side";
+    sel.title = assumeTitle(name);
     sel.addEventListener("change", () => {
       set(sel.value === "null" ? null : sel.value === "true");
       applyEval();
@@ -2734,13 +2739,60 @@ function buildSimbar() {
   const chSel = mkAssume("changes", () => sim.assumeChanges, (v) => { sim.assumeChanges = v; });
   const exSel = mkAssume("exists", () => sim.assumeExists, (v) => { sim.assumeExists = v; });
 
+  // rules:changes are decided by a changed-file list when one is in force: the
+  // diff embedded by `glpv scan --diff/--changed-file`, or a list typed here
+  // (which overrides the scanned diff for every pipeline).
+  const rootDiff = (() => {
+    const r = G.pipelines.find((p) => (p.kind === "root" || p.kind === "detached") && p.diff && p.diff.files);
+    return r ? r.diff : null;
+  })();
+  const diffBtn = h("button", "", "changed files");
+  diffBtn.title =
+    "the changed-file list rules:changes are evaluated against; blank = the scanned diff (if any), " +
+    "otherwise the assumption applies";
+  const diffBox = h("textarea", "changed-files");
+  diffBox.hidden = true;
+  diffBox.rows = 4;
+  diffBox.spellcheck = false;
+  diffBox.dataset.sim = "changed-files";
+  diffBox.placeholder = "changed files, one per line — overrides the scanned diff for every pipeline";
+  const syncDiff = () => {
+    const n = sim.changedFiles ? sim.changedFiles.length + " (override)" : rootDiff ? rootDiff.files.length + " (scanned)" : null;
+    diffBtn.textContent = "changed files" + (n ? ": " + n : "");
+    const on = !!(sim.changedFiles || rootDiff);
+    chSel.disabled = on;
+    chSel.title = on
+      ? "a changed-file list is in force; rules:changes are decided by it, not by this assumption"
+      : assumeTitle("changes");
+    if (sim.changedFiles) diffBox.value = sim.changedFiles.join("\n");
+    else if (diffBox.hidden) diffBox.value = "";
+  };
+  diffBtn.addEventListener("click", () => {
+    diffBox.hidden = !diffBox.hidden;
+    if (!diffBox.hidden) {
+      if (!diffBox.value && !sim.changedFiles && rootDiff) diffBox.value = rootDiff.files.join("\n");
+      diffBox.focus();
+    }
+  });
+  diffBox.addEventListener("input", () => {
+    const list = diffBox.value.split("\n").map((f) => f.trim()).filter(Boolean);
+    const scanned = rootDiff ? rootDiff.files : null;
+    const same = scanned && list.length === scanned.length && list.every((f, i) => f === scanned[i]);
+    sim.changedFiles = !list.length || same ? null : list;
+    syncDiff();
+    applyEval();
+  });
+  simbar.appendChild(diffBtn);
+  simbar.appendChild(diffBox);
+
   const reset = h("button", "", "reset");
   reset.addEventListener("click", () => {
     sim.source = DEFAULT_SOURCE;
     sim.ref = ""; sim.tag = false; sim.vars = [];
-    sim.assumeChanges = null; sim.assumeExists = null;
+    sim.assumeChanges = null; sim.assumeExists = null; sim.changedFiles = null;
     srcSel.value = sim.source; refIn.value = ""; tagCb.checked = false;
     chSel.value = "null"; exSel.value = "null";
+    diffBox.value = ""; diffBox.hidden = true; syncDiff();
     renderVars(); applyEval();
   });
   simbar.appendChild(reset);
@@ -2751,7 +2803,9 @@ function buildSimbar() {
     tagCb.checked = sim.tag;
     chSel.value = sim.assumeChanges === null ? "null" : String(sim.assumeChanges);
     exSel.value = sim.assumeExists === null ? "null" : String(sim.assumeExists);
+    syncDiff();
   };
+  syncDiff();
   simbar.appendChild(h("span", "sim-note",
     "the whole graph re-evaluates as you type — downstream pipelines grey out when their trigger no longer fires"));
 }
@@ -2902,14 +2956,14 @@ function evalGateWorld(g, baseTable, facts, assign, gi) {
       const v = assign.get("cl:" + gi + ":" + ci);
       return v === undefined ? null : v;
     },
-    changes: () => sim.assumeChanges,
+    changes: (q) => changesChecker(g.pipeline, sim, pipeById)(q),
     exists: () => sim.assumeExists,
   };
   return evaluateRules(g.rules, vars, g.when, facts, atoms);
 }
 
 function solveOutcomes(gates, ctx) {
-  const facts = gates.map((g) => factsOf(g.pipeline, sim));
+  const facts = gates.map((g) => factsOf(g.pipeline, sim, pipeById));
   let nodes = 0;
   const treeSig = (t) =>
     t.leaf
@@ -3267,16 +3321,20 @@ function condBox(clause) {
       box.appendChild(row);
     }
   }
-  if (clause.changes) {
+  const hasChanges = clause.changes != null || clause.changes_regexp != null;
+  if (hasChanges) {
     const row = h("div", "cond-row cond-sep");
     row.appendChild(h("span", "cond-join", clause.if ? "and" : ""));
-    row.append("changed files match ");
-    row.appendChild(h("span", "cs", clause.changes.join(", ")));
+    row.append(clause.changes_regexp != null ? "changed files match regexp " : "changed files match ");
+    row.appendChild(
+      h("span", "cs", clause.changes_regexp != null ? String(clause.changes_regexp) : (clause.changes || []).join(", "))
+    );
+    if (clause.compare_to != null) row.append(" vs " + clause.compare_to);
     box.appendChild(row);
   }
   if (clause.exists) {
     const row = h("div", "cond-row cond-sep");
-    row.appendChild(h("span", "cond-join", clause.if || clause.changes ? "and" : ""));
+    row.appendChild(h("span", "cond-join", clause.if || hasChanges ? "and" : ""));
     row.append("repo contains ");
     row.appendChild(h("span", "cs", clause.exists.join(", ")));
     box.appendChild(row);
@@ -3326,13 +3384,17 @@ function varCandidatesFor(gates) {
   return out;
 }
 
+const assumedMatch = (b) => (b === null || b === undefined ? null : { kind: "assumed", b });
+
 function evalGateSim(g, table, facts, assign, atomAssign) {
   const vars = new Map(table);
   for (const [n, v] of assign)
     vars.set(n, v === null ? { k: "unset" } : { k: "known", v });
   const atoms = {
-    changes: () =>
-      atomAssign.has("changes") ? atomAssign.get("changes") : sim.assumeChanges,
+    changes: (q) =>
+      atomAssign.has("changes")
+        ? assumedMatch(atomAssign.get("changes"))
+        : changesChecker(g.pipeline, sim, pipeById)(q),
     exists: () =>
       atomAssign.has("exists") ? atomAssign.get("exists") : sim.assumeExists,
   };
@@ -3361,7 +3423,7 @@ function findEnablingScenario(gates) {
 
 function searchScenario(gates, cand) {
   const tables = gates.map(gateBaseTable);
-  const facts = gates.map((g) => factsOf(g.pipeline, sim));
+  const facts = gates.map((g) => factsOf(g.pipeline, sim, pipeById));
   let nodes = 0;
   const rec = (assign, atomAssign) => {
     if (nodes++ > 8000) return null;
@@ -3387,6 +3449,8 @@ function searchScenario(gates, cand) {
         return null;
       }
       for (const key of ["changes", "exists"]) {
+        // a changes clause is decided by the diff once a file list is in force
+        if (key === "changes" && effectiveFiles(g.pipeline, sim, pipeById)) continue;
         if (clause && clause[key] && !atomAssign.has(key)) {
           for (const v of [true, false]) {
             atomAssign.set(key, v);
@@ -3593,7 +3657,7 @@ function renderPanel(id) {
     panel.appendChild(h("h3", "", "Invocation simulation"));
     const gates = gateChainFor(job, p);
     const gTables = gates.map(gateBaseTable);
-    const gFacts = gates.map((g2) => factsOf(g2.pipeline, sim));
+    const gFacts = gates.map((g2) => factsOf(g2.pipeline, sim, pipeById));
     const emptyA = new Map();
     const steps = gates.map((g2, gi) => {
       const evx = evalGateSim(g2, gTables[gi], gFacts[gi], emptyA, emptyA);
@@ -3688,13 +3752,23 @@ function renderPanel(id) {
           const r2 = evalIf(st2.clause.if, gTables[st2.gi]);
           addTerm(r2.result, truncate(String(st2.clause.if), 110), varsLine(r2));
         }
-        if (st2.clause.changes) {
-          const a = sim.assumeChanges;
-          addTerm(
-            a === null ? "unknown" : a ? "true" : "false",
-            "changes: [" + truncate(st2.clause.changes.join(", "), 70) + "]",
-            a === null ? "pick an assumption in the sim bar" : "assumed " + (a ? "matching" : "not matching")
+        if (st2.clause.changes != null || st2.clause.changes_regexp != null) {
+          const cl2 = st2.clause;
+          const [c2, n2] = evalChanges(
+            cl2.changes || [], cl2.compare_to ?? null, cl2.changes_regexp ?? null,
+            gTables[st2.gi], gFacts[st2.gi].pushEvent, gFacts[st2.gi].source,
+            changesChecker(st2.g.pipeline, sim, pipeById)
           );
+          const what =
+            cl2.changes_regexp != null
+              ? "changes: regexp(" + truncate(String(cl2.changes_regexp), 60) + ")"
+              : "changes: [" + truncate((cl2.changes || []).join(", "), 70) + "]";
+          const detail = !n2
+            ? ""
+            : /undecidable statically$/.test(n2)
+              ? "pick an assumption in the sim bar, or list the changed files"
+              : n2.replace(/^changes: /, "");
+          addTerm(c2, what + (cl2.compare_to != null ? " compare_to: " + cl2.compare_to : ""), detail);
         }
         if (st2.clause.exists) {
           const a = sim.assumeExists;

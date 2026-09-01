@@ -1,7 +1,8 @@
 /* glpv evaluator mirror.
  *
- * A faithful JS port of glpv-core/src/rules/ (expr.rs, mod.rs) plus the
- * simulated CI variable tables mirrored from glpv-wasm. The viewer HTML embeds
+ * A faithful JS port of glpv-core/src/rules/ (expr.rs, mod.rs, changes.rs)
+ * and glob.rs (rules:changes matching), plus the simulated CI variable tables
+ * and diff inheritance mirrored from glpv-wasm. The viewer HTML embeds
  * this file ahead of app.js in one shared script scope; ui/test/parity.test.mjs
  * `require()`s it and checks it against the Rust engine (the expression cases
  * in tests/parity/expr-cases.json, and the embedded wasm build over whole
@@ -370,6 +371,244 @@ function evalIf(expr, vars) {
   return { result: present(pop()), varsUsed, notes };
 }
 
+/* ================= rules:changes (port of rules/changes.rs + glob.rs) =================
+ * Patterns are matched like Ruby's File.fnmatch? under
+ * FNM_PATHNAME | FNM_DOTMATCH | FNM_EXTGLOB: braces expand first, `*` and `?`
+ * never cross "/", a double star only descends as a whole "**" + "/" segment,
+ * classes never match "/", paths are compared whole and repository-relative. */
+
+const MAX_PATTERN_COMPARISONS = 50000;
+
+/** Brace expansion of the first top-level {…} group, recursively. */
+function braceExpand(pattern) {
+  let lbrace = -1, rbrace = -1, nest = 0;
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === "{") {
+      if (nest === 0) lbrace = i;
+      nest++;
+    } else if (c === "}" && lbrace >= 0) {
+      nest--;
+      if (nest === 0) { rbrace = i; break; }
+    } else if (c === "\\") i++;
+  }
+  if (lbrace < 0) return [pattern];
+  if (rbrace < 0) return []; // unmatched "{": can never match
+  const prefix = pattern.slice(0, lbrace), suffix = pattern.slice(rbrace + 1);
+  const out = [];
+  let start = lbrace + 1, p = lbrace + 1;
+  nest = 0;
+  for (;;) {
+    if (p >= rbrace || (pattern[p] === "," && nest === 0)) {
+      const alt = pattern.slice(start, Math.min(p, rbrace));
+      out.push(...braceExpand(prefix + alt + suffix));
+      if (p >= rbrace) break;
+      start = p + 1;
+    } else {
+      const c = pattern[p];
+      if (c === "{") nest++;
+      else if (c === "}") nest = Math.max(0, nest - 1);
+      else if (c === "\\") p++;
+    }
+    p++;
+  }
+  return out;
+}
+
+const NEVER_MATCHES = /^[^\s\S]$/u;
+const RE_SYNTAX = /[\\^$.*+?()[\]{}|]/;
+const reEsc = (ch) => (RE_SYNTAX.test(ch) ? "\\" + ch : ch);
+const classEsc = (ch) => (/[\\\][^-]/.test(ch) ? "\\" + ch : ch);
+const cp = (ch) => ch.codePointAt(0);
+
+/** Bracket expression starting after "[" → {text, next} or null (unterminated). */
+function bracketClass(chars, i) {
+  const negated = chars[i] === "!" || chars[i] === "^";
+  if (negated) i++;
+  const items = [];
+  const take = () => {
+    let c = chars[i];
+    if (c === undefined) return undefined;
+    if (c === "\\") {
+      i++;
+      c = chars[i];
+      if (c === undefined) return undefined;
+    }
+    i++;
+    return c;
+  };
+  for (;;) {
+    if (chars[i] === undefined) return null;
+    if (chars[i] === "]") break;
+    const lo = take();
+    if (lo === undefined) return null;
+    if (chars[i] === "-" && chars[i + 1] !== undefined && chars[i + 1] !== "]") {
+      i++;
+      const hi = take();
+      if (hi === undefined) return null;
+      if (cp(lo) <= cp(hi)) items.push([lo, hi]);
+    } else items.push([lo, lo]);
+  }
+  const next = i + 1;
+  let cls = "[";
+  if (negated) cls += "^/";
+  for (const [lo, hi] of items) {
+    // A class never matches "/": carve it out of positive ranges.
+    let parts;
+    if (!negated && cp(lo) <= cp("/") && cp("/") <= cp(hi)) {
+      parts = [];
+      if (cp(lo) < cp("/")) parts.push([lo, "."]);
+      if (cp("/") < cp(hi)) parts.push(["0", hi]);
+    } else parts = [[lo, hi]];
+    for (const [a, b] of parts) {
+      cls += classEsc(a);
+      if (a !== b) cls += "-" + classEsc(b);
+    }
+  }
+  if (cls === "[") return { text: "[^\\s\\S]", next }; // empty positive class
+  return { text: cls + "]", next };
+}
+
+/** One brace-free rules:changes pattern → an anchored RegExp (fnmatch semantics). */
+function changesGlobToRegExp(pattern) {
+  const chars = [...pattern];
+  const starsAt = (k) => chars[k] === "*" && chars[k + 1] === "*" && chars[k + 2] === "/";
+  let re = "^", i = 0, segmentStart = true;
+  while (i < chars.length) {
+    const c = chars[i];
+    if (segmentStart && starsAt(i)) {
+      while (starsAt(i)) i += 3;
+      re += "(?:[^/]*/)*";
+      continue;
+    }
+    segmentStart = false;
+    if (c === "*") {
+      while (i < chars.length && chars[i] === "*") i++;
+      re += "[^/]*";
+      continue;
+    }
+    if (c === "?") re += "[^/]";
+    else if (c === "[") {
+      const cls = bracketClass(chars, i + 1);
+      if (!cls) return NEVER_MATCHES;
+      re += cls.text;
+      i = cls.next;
+      continue;
+    } else if (c === "\\" && i + 1 < chars.length) {
+      i++;
+      re += reEsc(chars[i]);
+    } else if (c === "/") {
+      re += "/";
+      segmentStart = true;
+    } else re += reEsc(c);
+    i++;
+  }
+  return new RegExp(re + "$", "u");
+}
+
+function changesMatcher(patterns) {
+  const out = [];
+  for (const p of patterns) for (const e of braceExpand(p)) out.push(changesGlobToRegExp(e));
+  return out;
+}
+
+/**
+ * Match patterns against a changed-file list, GitLab-style. Returns
+ * {kind:"matched", file} | {kind:"noMatch", n} | {kind:"assumed", b}.
+ */
+function matchChanges(patterns, files) {
+  if (!patterns.length || !files.length) return { kind: "noMatch", n: files.length };
+  if (patterns.length * files.length > MAX_PATTERN_COMPARISONS) return { kind: "assumed", b: true };
+  const res = changesMatcher(patterns);
+  for (const f of files) if (res.some((re) => re.test(f))) return { kind: "matched", file: f };
+  return { kind: "noMatch", n: files.length };
+}
+
+/** Only branch pushes, merge request and external PR pipelines carry a diff. */
+function hasPushEvent(source, isTag) {
+  return !isTag && (source === "push" || source === "merge_request_event" || source === "external_pull_request_event");
+}
+
+/**
+ * GitLab's ExpandVariables.expand_existing: $NAME / ${NAME} of known variables
+ * are substituted, unset and unknown ones stay literal; unknown names are
+ * reported so the caller can stay undecided.
+ */
+function expandExisting(text, vars) {
+  let out = "";
+  const unknown = [];
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] !== "$") {
+      out += text[i];
+      i++;
+      continue;
+    }
+    if (text[i + 1] === "$") { out += "$"; i += 2; continue; }
+    let name, next;
+    if (text[i + 1] === "{") {
+      const end = text.indexOf("}", i + 2);
+      if (end < 0) { out += "$"; i++; continue; }
+      name = text.slice(i + 2, end);
+      next = end + 1;
+    } else {
+      let j = i + 1;
+      while (j < text.length && /[A-Za-z0-9_]/.test(text[j])) j++;
+      name = text.slice(i + 1, j);
+      next = j;
+    }
+    if (!name) { out += "$"; i++; continue; }
+    const st = vars.get(name) || { k: "unknown" };
+    if (st.k === "known") out += st.v;
+    else {
+      if (st.k === "unknown" && !unknown.includes(name)) unknown.push(name);
+      out += text.slice(i, next);
+    }
+    i = next;
+  }
+  return { value: out, unknown };
+}
+
+/**
+ * One changes: clause → [tri, note]. Order mirrors Clause::Changes#satisfied_by?:
+ * expand compare_to; without compare_to and without a push event the clause
+ * is true; expand patterns; ask the checker ({patterns, compareTo} →
+ * matchChanges result or null = undecided).
+ */
+function evalChanges(patterns, compareTo, regexp, vars, pushEvent, source, checker) {
+  let cmp = null;
+  if (compareTo !== null && compareTo !== undefined) {
+    const e = expandExisting(compareTo, vars);
+    if (e.unknown.length) return ["unknown", "changes: compare_to $" + e.unknown.join(", $") + " unknown"];
+    cmp = e.value;
+  }
+  if (cmp === null && !pushEvent) {
+    return ["true", "changes: no push event for source " + source + "; always matches"];
+  }
+  const expanded = [], unknown = [];
+  for (const p of patterns) {
+    const e = expandExisting(p, vars);
+    if (e.unknown.length) {
+      for (const n of e.unknown) if (!unknown.includes(n)) unknown.push(n);
+    } else if (!expanded.includes(e.value)) expanded.push(e.value);
+  }
+  if (unknown.length) return ["unknown", "changes: $" + unknown.join(", $") + " unknown"];
+  const outcome = checker ? checker({ patterns: expanded, compareTo: cmp }) : null;
+  const assumed = (b) => (b ? "changes: assumed match" : "changes: assumed no match");
+  const tri = (b) => (b ? "true" : "false");
+  if (regexp !== null && regexp !== undefined) {
+    if (outcome && outcome.kind === "noMatch" && outcome.n === 0) {
+      return ["false", "changes: no match in 0 changed file(s)"];
+    }
+    if (outcome && outcome.kind === "assumed") return [tri(outcome.b), assumed(outcome.b)];
+    return ["unknown", "changes:regexp is not evaluated"];
+  }
+  if (!outcome) return ["unknown", "changes: depends on the diff; undecidable statically"];
+  if (outcome.kind === "matched") return ["true", "changes: matched by " + outcome.file];
+  if (outcome.kind === "noMatch") return ["false", "changes: no match in " + outcome.n + " changed file(s)"];
+  return [tri(outcome.b), assumed(outcome.b)];
+}
+
 /* ================= rules evaluation (port of rules/mod.rs) ================= */
 
 function outcomeOfWhen(w) {
@@ -389,17 +628,25 @@ function stateText(s) {
 function clauseText(c) {
   const parts = [];
   if (c.if) parts.push("if: " + c.if);
-  if (c.changes) parts.push("changes: [" + c.changes.join(", ") + "]");
+  let changes = null;
+  if (c.changes_regexp !== null && c.changes_regexp !== undefined) {
+    changes = "changes: regexp(" + c.changes_regexp + ")";
+  } else if (c.changes) changes = "changes: [" + c.changes.join(", ") + "]";
+  if (changes !== null) {
+    if (c.compare_to !== null && c.compare_to !== undefined) changes += " compare_to: " + c.compare_to;
+    parts.push(changes);
+  }
   if (c.exists) parts.push("exists: [" + c.exists.join(", ") + "]");
   return parts.length ? parts.join(" AND ") : "(always)";
 }
 
 /**
  * Evaluate a summarised rules chain. `jobWhen` is the job-level `when`;
- * `facts` = {source, refName, isTag} feed legacy only/except; `atoms`
- * optionally decides exists/changes clauses ({exists(cl,i), changes(cl,i)} →
- * true|false|null) or forces a whole clause ({clause(cl,i)} → true|false|null,
- * used by the outcome explorer). Trace entries always carry every key so the
+ * `facts` = {source, refName, isTag, pushEvent} (see factsOf); `atoms`
+ * optionally decides exists clauses ({exists(cl,i)} → true|false|null) and
+ * changes clauses ({changes(query, cl, i)} → a matchChanges result or null),
+ * or forces a whole clause ({clause(cl,i)} → true|false|null, used by the
+ * outcome explorer). Trace entries always carry every key so the
  * shape matches the Rust engine's JSON.
  */
 function evaluateRules(summary, vars, jobWhen, facts, atoms) {
@@ -441,13 +688,14 @@ function evaluateRules(summary, vars, jobWhen, facts, atoms) {
           result = andTri(result, "unknown");
         }
       }
-      if (clause.changes) {
-        const a = atoms && atoms.changes ? atoms.changes(clause, index) : null;
-        if (a === false) result = andTri(result, "false");
-        else if (a !== true) {
-          note = note || "changes: depends on the diff; undecidable statically";
-          result = andTri(result, "unknown");
-        }
+      if (clause.changes != null || clause.changes_regexp != null) {
+        const checker = atoms && atoms.changes ? (q) => atoms.changes(q, clause, index) : null;
+        const [c, n] = evalChanges(
+          clause.changes || [], clause.compare_to ?? null, clause.changes_regexp ?? null,
+          vars, !!facts.pushEvent, facts.source, checker
+        );
+        if (n) note = note ? note + "; " + n : n;
+        result = andTri(result, c);
       }
     }
     const when = clause.when || jobWhen;
@@ -537,17 +785,11 @@ function evaluateLegacy(summary, jobWhen, facts) {
 
 /* ================= variable tables (mirror of glpv-wasm) ================= */
 
-/** sim: {source, ref, tag, vars: [[k, v]], assumeChanges, assumeExists} */
+/** sim: {source, ref, tag, vars: [[k, v]], assumeChanges, assumeExists, changedFiles} */
 function applySimVar(t, k, v) {
   if (!k) return;
   if (v === "(unset)") t.set(k, { k: "unset" });
   else t.set(k, { k: "known", v: String(v) });
-}
-function simAtoms(sim) {
-  return {
-    changes: () => sim.assumeChanges,
-    exists: () => sim.assumeExists,
-  };
 }
 
 function slugify(s) {
@@ -568,8 +810,67 @@ function sourceOf(p, sim) {
 function isTagOf(p, sim) {
   return simulated(p) ? sim.tag : false;
 }
-function factsOf(p, sim) {
-  return { source: sourceOf(p, sim), refName: refNameOf(p, sim), isTag: isTagOf(p, sim) };
+function isChild(p) {
+  return p.kind === "child" || p.kind === "dynamic_child";
+}
+/** byId: Map pipeline id → pipeline (pipelineIndex(G)); null when unavailable. */
+function parentOf(p, byId) {
+  return p.parent && byId ? byId.get(p.parent[0]) || null : null;
+}
+function pipelineIndex(G) {
+  return new Map(G.pipelines.map((p) => [p.id, p]));
+}
+/** A child has a push event exactly when its parent has; downstream never. */
+function pushEventOf(p, sim, byId) {
+  let cur = p;
+  for (let i = 0; i < 64 && cur; i++) {
+    if (simulated(cur)) return hasPushEvent(sim.source, sim.tag);
+    if (!isChild(cur)) return false;
+    cur = parentOf(cur, byId);
+  }
+  return false;
+}
+/** The changed-file list in force: the simulation's override, else the
+ * pipeline's own (or, for a child, the nearest ancestor's). */
+function effectiveFiles(p, sim, byId) {
+  if (sim.changedFiles) return sim.changedFiles;
+  let cur = p;
+  for (let i = 0; i < 64 && cur; i++) {
+    if (cur.diff && cur.diff.files) return cur.diff.files;
+    if (!isChild(cur)) return null;
+    cur = parentOf(cur, byId);
+  }
+  return null;
+}
+/** The changes checker of one pipeline (mirror of the wasm closure). */
+function changesChecker(p, sim, byId) {
+  const files = effectiveFiles(p, sim, byId);
+  return (q) => {
+    let list;
+    if (q.compareTo !== null && q.compareTo !== undefined) {
+      const m = p.diff && p.diff.compare_to;
+      list = m && Object.prototype.hasOwnProperty.call(m, q.compareTo) ? m[q.compareTo] : null;
+    } else list = files;
+    if (list) return matchChanges(q.patterns, list);
+    return sim.assumeChanges === null || sim.assumeChanges === undefined
+      ? null
+      : { kind: "assumed", b: sim.assumeChanges };
+  };
+}
+function simAtoms(sim, p, byId) {
+  const changes = changesChecker(p, sim, byId);
+  return {
+    changes: (q) => changes(q),
+    exists: () => sim.assumeExists,
+  };
+}
+function factsOf(p, sim, byId) {
+  return {
+    source: sourceOf(p, sim),
+    refName: refNameOf(p, sim),
+    isTag: isTagOf(p, sim),
+    pushEvent: pushEventOf(p, sim, byId),
+  };
 }
 
 /** The predefined CI_* table of a pipeline (without the simulation's own vars). */
@@ -637,19 +938,21 @@ function baseJobMap(G) {
 /** The JS fallback evaluator: job id → {outcome, blockedBy?, trace}. */
 function evaluateGraph(G, sim, baseJobOf) {
   const jobEval = new Map();
+  const byId = pipelineIndex(G);
   for (const p of G.pipelines) {
-    const facts = factsOf(p, sim);
+    const facts = factsOf(p, sim, byId);
+    const atoms = simAtoms(sim, p, byId);
     const pvars = pipelineVarTable(p, sim);
     for (const [k, v] of sim.vars) applySimVar(pvars, k, v);
     const wf = p.workflow_rules
-      ? evaluateRules(p.workflow_rules, pvars, "on_success", facts, simAtoms(sim))
+      ? evaluateRules(p.workflow_rules, pvars, "on_success", facts, atoms)
       : null;
     const cache = new Map();
     for (const j of p.jobs) {
       const src = baseJobOf.get(j.id) || j;
       let ev = cache.get(src.id);
       if (!ev) {
-        ev = evaluateRules(src.rules, jobVarTable(p, src, sim), src.when, facts, simAtoms(sim));
+        ev = evaluateRules(src.rules, jobVarTable(p, src, sim), src.when, facts, atoms);
         cache.set(src.id, ev);
       }
       if (wf && wf.outcome === "skipped") {
@@ -673,6 +976,7 @@ function wasmSimOf(sim, traceJob) {
     trace_job: traceJob || null,
     assume_changes: sim.assumeChanges,
     assume_exists: sim.assumeExists,
+    changed_files: sim.changedFiles ?? null,
   };
 }
 
@@ -682,7 +986,10 @@ if (typeof module === "object" && module && module.exports) {
   module.exports = {
     SOURCES, MAX_TOKENS, lex, toRpn, re2ToJs, compileRe, evalIf,
     outcomeOfWhen, andTri, stateText, clauseText, evaluateRules, evaluateLegacy,
+    braceExpand, changesGlobToRegExp, changesMatcher, matchChanges, hasPushEvent,
+    expandExisting, evalChanges, MAX_PATTERN_COMPARISONS,
     applySimVar, simAtoms, slugify, refNameOf, sourceOf, isTagOf, factsOf,
+    pipelineIndex, pushEventOf, effectiveFiles, changesChecker,
     pipelineVarTable, jobVarTable, baseJobMap, evaluateGraph, wasmSimOf,
   };
 }

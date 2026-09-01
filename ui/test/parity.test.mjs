@@ -52,23 +52,29 @@ const ASSUMPTIONS = [[null, null], [true, false], [false, true]];
 const VARS = [
   [],
   [["DEPLOY_ENV", "production"]],
-  [["DEPLOY_ENV", "(unset)"], ["REPORT_KIND", "weekly"]],
+  [["DEPLOY_ENV", "(unset)"], ["REPORT_KIND", "weekly"], ["SRC_DIR", "src"]],
   [["", "ignored"], ["CI_COMMIT_BRANCH", "(unset)"]],
 ];
+// changed-file overrides: none (the embedded diff, if any), a matching list,
+// a non-matching list, and an explicit empty diff
+const CHANGED = [null, ["src/main.rs"], ["docs/sub/x.md", "README.md"], []];
 
 function* sims(full) {
   for (const source of E.SOURCES) {
     for (const r of REFS) {
       for (const [ac, ae] of full ? ASSUMPTIONS : [ASSUMPTIONS[0]]) {
         for (const vars of full ? VARS : [VARS[0]]) {
-          yield { source, ref: r.ref, tag: r.tag, vars, assumeChanges: ac, assumeExists: ae };
+          for (const cf of full ? CHANGED : [null, CHANGED[1]]) {
+            yield { source, ref: r.ref, tag: r.tag, vars, assumeChanges: ac, assumeExists: ae, changedFiles: cf };
+          }
         }
       }
     }
   }
 }
 const simLabel = (s) =>
-  `${s.source} ref=${JSON.stringify(s.ref)} tag=${s.tag} assume=${s.assumeChanges},${s.assumeExists} vars=${JSON.stringify(s.vars)}`;
+  `${s.source} ref=${JSON.stringify(s.ref)} tag=${s.tag} assume=${s.assumeChanges},${s.assumeExists} ` +
+  `vars=${JSON.stringify(s.vars)} changed=${JSON.stringify(s.changedFiles)}`;
 
 // One canonical shape for both engines (the Rust JSON omits empty/none keys).
 const canonTrace = (t) => ({
@@ -130,7 +136,7 @@ for (const sample of SAMPLES) {
           }
         }
       }
-      assert.ok(sims_ >= 500, "matrix size " + sims_);
+      assert.ok(sims_ >= 2000, "matrix size " + sims_);
     });
 
     test("traces agree for every job under the reduced matrix", () => {

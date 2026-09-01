@@ -16,6 +16,7 @@ const steps = [
   ["run", "-q", "-p", "glpv-cli", "--example", "build_fixtures", "--",
     "demo/projects", "target/ui-test/demo"],
   ["run", "-q", "-p", "glpv-cli", "--", "scan", "--projects", "target/ui-test/fixtures", "--all",
+    "--changed-file", "src/main.rs", "--changed-file", "docs/sub/x.md",
     "-o", "target/ui-test/out-fixtures", "--format", "html,json"],
   ["run", "-q", "-p", "glpv-cli", "--", "scan", "--projects", "target/ui-test/demo",
     "--entry", "pipelines-demo/shop", "-o", "target/ui-test/out-demo", "--format", "html,json"],
