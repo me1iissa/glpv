@@ -234,6 +234,11 @@ fn compile_pattern(text: &str) -> Option<Regex> {
         let slash = body_flags.rfind('/')?;
         let (body, flags) = body_flags.split_at(slash);
         let flags = &flags[1..];
+        // GitLab's lexeme is /…/[ismU]*: an empty body or a foreign flag
+        // (e.g. a variable holding "/a/x") is not a regex.
+        if body.is_empty() || !flags.chars().all(|c| matches!(c, 'i' | 'm' | 's' | 'U')) {
+            return None;
+        }
         let source = if flags.is_empty() {
             body.replace("\\/", "/")
         } else {
@@ -398,7 +403,10 @@ fn lex(expr: &str) -> Result<Vec<Tok>, String> {
                     out.push(Tok::Bool(false));
                     i += 5;
                 } else {
-                    return Err(format!("unexpected character `{}`", &expr[i..i + 1]));
+                    // Slice by char, not byte: a multibyte character here must
+                    // produce a note, never a panic (the wasm build would trap).
+                    let ch = expr[i..].chars().next().unwrap_or('?');
+                    return Err(format!("unexpected character `{ch}`"));
                 }
             }
         }
@@ -463,101 +471,86 @@ fn to_rpn(tokens: &[Tok]) -> Result<Vec<Tok>, String> {
 mod tests {
     use super::*;
 
-    fn table() -> VarTable {
-        let mut t = VarTable::default();
-        t.set_known("CI_COMMIT_BRANCH", "main");
-        t.set_known("CI_DEFAULT_BRANCH", "main");
-        t.set_known("CI_PIPELINE_SOURCE", "push");
-        t.set_known("EMPTY", "");
-        t.set("CI_COMMIT_TAG", VarState::Unset);
-        t.set("MYSTERY", VarState::Unknown);
-        t
+    /// The expression cases shared with the viewer's JS mirror
+    /// (`ui/test/parity.test.mjs`): one JSON file, two engines.
+    const CASES: &str = include_str!("../../../../tests/parity/expr-cases.json");
+
+    fn table_from(vars: &serde_json::Value, into: &mut VarTable) {
+        for (name, spec) in vars.as_object().expect("vars object") {
+            let spec = spec.as_array().expect("var spec array");
+            match spec[0].as_str().expect("var state") {
+                "known" => into.set_known(name, spec[1].as_str().expect("known value")),
+                "unset" => into.set(name, VarState::Unset),
+                "unknown" => into.set(name, VarState::Unknown),
+                other => panic!("bad var state {other:?}"),
+            }
+        }
     }
 
-    fn ev(expr: &str) -> Tri {
-        eval_if(expr, &table()).result
-    }
-
-    #[test]
-    fn comparisons() {
-        assert_eq!(ev(r#"$CI_COMMIT_BRANCH == "main""#), Tri::True);
-        assert_eq!(ev(r#"$CI_COMMIT_BRANCH != "main""#), Tri::False);
-        assert_eq!(ev(r#"$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH"#), Tri::True);
-        assert_eq!(ev(r#"$CI_COMMIT_TAG == null"#), Tri::True);
-        assert_eq!(ev(r#"$CI_COMMIT_BRANCH == null"#), Tri::False);
-        // Comparing a string variable to a boolean literal is always false.
-        assert_eq!(ev(r#"$CI_COMMIT_BRANCH == true"#), Tri::False);
-    }
-
-    #[test]
-    fn presence() {
-        assert_eq!(ev("$CI_COMMIT_BRANCH"), Tri::True);
-        assert_eq!(ev("$CI_COMMIT_TAG"), Tri::False, "unset variable");
-        assert_eq!(ev("$EMPTY"), Tri::False, "blank string fails present?");
-        assert_eq!(ev("$MYSTERY"), Tri::Unknown);
+    fn tri_text(t: Tri) -> &'static str {
+        match t {
+            Tri::True => "true",
+            Tri::False => "false",
+            Tri::Unknown => "unknown",
+        }
     }
 
     #[test]
-    fn boolean_operators_ruby_semantics() {
-        assert_eq!(
-            ev(r#"$CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE == "push""#),
-            Tri::True
+    fn parity_cases() {
+        let doc: serde_json::Value = serde_json::from_str(CASES).expect("expr-cases.json");
+        let mut base = VarTable::default();
+        table_from(&doc["vars"], &mut base);
+        let mut failures = Vec::new();
+        let cases = doc["cases"].as_array().expect("cases array");
+        for case in cases {
+            let id = case["id"].as_str().expect("case id");
+            let expr = case["expr"].as_str().expect("case expr");
+            let mut table = base.clone();
+            if let Some(patch) = case.get("vars") {
+                table_from(patch, &mut table);
+            }
+            let r = eval_if(expr, &table);
+            let want = case["result"].as_str().expect("case result");
+            if tri_text(r.result) != want {
+                failures.push(format!("{id}: result {} (want {want})", tri_text(r.result)));
+            }
+            let want_notes: Vec<&str> = case["notes"]
+                .as_array()
+                .expect("case notes")
+                .iter()
+                .map(|n| n.as_str().expect("note string"))
+                .collect();
+            if r.notes != want_notes {
+                failures.push(format!("{id}: notes {:?} (want {want_notes:?})", r.notes));
+            }
+            if let Some(vu) = case.get("vars_used") {
+                let got: Vec<(String, String)> = r
+                    .vars_used
+                    .iter()
+                    .map(|(n, s)| (n.clone(), crate::rules::state_text(s)))
+                    .collect();
+                let want: Vec<(String, String)> = vu
+                    .as_array()
+                    .expect("vars_used array")
+                    .iter()
+                    .map(|pair| {
+                        (
+                            pair[0].as_str().expect("var name").to_string(),
+                            pair[1].as_str().expect("var state text").to_string(),
+                        )
+                    })
+                    .collect();
+                if got != want {
+                    failures.push(format!("{id}: vars_used {got:?} (want {want:?})"));
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "{} of {} expression cases diverge:\n  {}",
+            failures.len(),
+            cases.len(),
+            failures.join("\n  ")
         );
-        assert_eq!(ev(r#"$CI_COMMIT_TAG && $CI_COMMIT_BRANCH"#), Tri::False);
-        assert_eq!(ev(r#"$CI_COMMIT_TAG || $CI_COMMIT_BRANCH"#), Tri::True);
-        // "" is truthy for ||, but the returned "" then fails present?.
-        assert_eq!(ev(r#"$EMPTY || $CI_COMMIT_BRANCH"#), Tri::False);
-        assert_eq!(ev(r#"$MYSTERY || $CI_COMMIT_BRANCH"#), Tri::Unknown);
-        assert_eq!(ev(r#"!$CI_COMMIT_TAG"#), Tri::True);
-        assert_eq!(
-            ev(r#"!$EMPTY"#),
-            Tri::False,
-            "! uses Ruby truthiness, not present?"
-        );
-    }
-
-    #[test]
-    fn parentheses_and_precedence() {
-        assert_eq!(
-            ev(
-                r#"($CI_COMMIT_TAG || $CI_COMMIT_BRANCH == "main") && $CI_PIPELINE_SOURCE == "push""#
-            ),
-            Tri::True
-        );
-        // && binds tighter than ||.
-        assert_eq!(
-            ev(r#"$CI_COMMIT_TAG && $MYSTERY || $CI_COMMIT_BRANCH == "main""#),
-            Tri::True
-        );
-    }
-
-    #[test]
-    fn regex_matching() {
-        assert_eq!(ev(r#"$CI_COMMIT_BRANCH =~ /^ma/"#), Tri::True);
-        assert_eq!(ev(r#"$CI_COMMIT_BRANCH =~ /^MA/i"#), Tri::True);
-        assert_eq!(ev(r#"$CI_COMMIT_BRANCH !~ /release/"#), Tri::True);
-        // nil coerces to "" on the left.
-        assert_eq!(ev(r#"$CI_COMMIT_TAG =~ /x/"#), Tri::False);
-        assert_eq!(ev(r#"$CI_COMMIT_TAG =~ /^$/"#), Tri::True);
-        // Non-regex right side → false with a note.
-        let r = eval_if(r#"$CI_COMMIT_BRANCH =~ "main""#, &table());
-        assert_eq!(r.result, Tri::False);
-        assert!(!r.notes.is_empty());
-        assert_eq!(ev(r#"$MYSTERY =~ /x/"#), Tri::Unknown);
-    }
-
-    #[test]
-    fn syntax_errors_are_false() {
-        assert_eq!(ev("$CI_COMMIT_BRANCH =="), Tri::False);
-        assert_eq!(ev("((("), Tri::False);
-        assert_eq!(ev("bogus tokens"), Tri::False);
-        assert_eq!(ev(""), Tri::False);
-    }
-
-    #[test]
-    fn vars_used_reported() {
-        let r = eval_if(r#"$CI_COMMIT_TAG || $MYSTERY"#, &table());
-        assert_eq!(r.vars_used.len(), 2);
-        assert_eq!(r.vars_used[0].0, "CI_COMMIT_TAG");
     }
 }

@@ -1,0 +1,639 @@
+{
+  "$comment": "Single source of truth for rules:if expression semantics. Consumed by crates/glpv-core/src/rules/expr.rs (parity_cases) and ui/test/parity.test.mjs. vars: name -> [\"known\", value] | [\"unset\"] | [\"unknown\"]. Per case: result in true|false|unknown; notes compared exactly; vars_used (optional) compared as [name, state_text] pairs; vars (optional) patches the table for that case.",
+  "vars": {
+    "CI_COMMIT_BRANCH": [
+      "known",
+      "main"
+    ],
+    "CI_DEFAULT_BRANCH": [
+      "known",
+      "main"
+    ],
+    "CI_PIPELINE_SOURCE": [
+      "known",
+      "push"
+    ],
+    "EMPTY": [
+      "known",
+      ""
+    ],
+    "NEL": [
+      "known",
+      "\u0085"
+    ],
+    "BOM": [
+      "known",
+      "\ufeff"
+    ],
+    "PATHY": [
+      "known",
+      "a/b"
+    ],
+    "PAT": [
+      "known",
+      "/^ma/i"
+    ],
+    "SLASH": [
+      "known",
+      "/"
+    ],
+    "BADPAT": [
+      "known",
+      "/a/x"
+    ],
+    "CI_COMMIT_TAG": [
+      "unset"
+    ],
+    "MYSTERY": [
+      "unknown"
+    ]
+  },
+  "cases": [
+    {
+      "id": "cmp-eq-str",
+      "expr": "$CI_COMMIT_BRANCH == \"main\"",
+      "result": "true",
+      "notes": [],
+      "vars_used": [
+        [
+          "CI_COMMIT_BRANCH",
+          "\"main\""
+        ]
+      ]
+    },
+    {
+      "id": "cmp-ne-str",
+      "expr": "$CI_COMMIT_BRANCH != \"main\"",
+      "result": "false",
+      "notes": []
+    },
+    {
+      "id": "cmp-var-var",
+      "expr": "$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH",
+      "result": "true",
+      "notes": [],
+      "vars_used": [
+        [
+          "CI_COMMIT_BRANCH",
+          "\"main\""
+        ],
+        [
+          "CI_DEFAULT_BRANCH",
+          "\"main\""
+        ]
+      ]
+    },
+    {
+      "id": "cmp-unset-null",
+      "expr": "$CI_COMMIT_TAG == null",
+      "result": "true",
+      "notes": [],
+      "vars_used": [
+        [
+          "CI_COMMIT_TAG",
+          "unset"
+        ]
+      ]
+    },
+    {
+      "id": "cmp-str-null",
+      "expr": "$CI_COMMIT_BRANCH == null",
+      "result": "false",
+      "notes": []
+    },
+    {
+      "id": "cmp-str-bool",
+      "expr": "$CI_COMMIT_BRANCH == true",
+      "result": "false",
+      "notes": [],
+      "why": "Ruby == across types is false"
+    },
+    {
+      "id": "presence-known",
+      "expr": "$CI_COMMIT_BRANCH",
+      "result": "true",
+      "notes": []
+    },
+    {
+      "id": "presence-unset",
+      "expr": "$CI_COMMIT_TAG",
+      "result": "false",
+      "notes": [],
+      "why": "unset variable"
+    },
+    {
+      "id": "presence-blank",
+      "expr": "$EMPTY",
+      "result": "false",
+      "notes": [],
+      "vars_used": [
+        [
+          "EMPTY",
+          "\"\""
+        ]
+      ],
+      "why": "blank string fails present?"
+    },
+    {
+      "id": "presence-unknown",
+      "expr": "$MYSTERY",
+      "result": "unknown",
+      "notes": [],
+      "vars_used": [
+        [
+          "MYSTERY",
+          "unknown"
+        ]
+      ]
+    },
+    {
+      "id": "bool-and-true",
+      "expr": "$CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE == \"push\"",
+      "result": "true",
+      "notes": []
+    },
+    {
+      "id": "bool-and-unset",
+      "expr": "$CI_COMMIT_TAG && $CI_COMMIT_BRANCH",
+      "result": "false",
+      "notes": []
+    },
+    {
+      "id": "bool-or-unset",
+      "expr": "$CI_COMMIT_TAG || $CI_COMMIT_BRANCH",
+      "result": "true",
+      "notes": []
+    },
+    {
+      "id": "bool-or-empty-then-blank",
+      "expr": "$EMPTY || $CI_COMMIT_BRANCH",
+      "result": "false",
+      "notes": [],
+      "why": "\"\" is truthy for ||, but the returned \"\" then fails present?"
+    },
+    {
+      "id": "bool-or-unknown",
+      "expr": "$MYSTERY || $CI_COMMIT_BRANCH",
+      "result": "unknown",
+      "notes": []
+    },
+    {
+      "id": "bool-not-unset",
+      "expr": "!$CI_COMMIT_TAG",
+      "result": "true",
+      "notes": []
+    },
+    {
+      "id": "bool-not-empty",
+      "expr": "!$EMPTY",
+      "result": "false",
+      "notes": [],
+      "why": "! uses Ruby truthiness, not present?"
+    },
+    {
+      "id": "prec-parens",
+      "expr": "($CI_COMMIT_TAG || $CI_COMMIT_BRANCH == \"main\") && $CI_PIPELINE_SOURCE == \"push\"",
+      "result": "true",
+      "notes": []
+    },
+    {
+      "id": "prec-and-tighter",
+      "expr": "$CI_COMMIT_TAG && $MYSTERY || $CI_COMMIT_BRANCH == \"main\"",
+      "result": "true",
+      "notes": [],
+      "why": "&& binds tighter than ||"
+    },
+    {
+      "id": "re-prefix",
+      "expr": "$CI_COMMIT_BRANCH =~ /^ma/",
+      "result": "true",
+      "notes": []
+    },
+    {
+      "id": "re-flag-i",
+      "expr": "$CI_COMMIT_BRANCH =~ /^MA/i",
+      "result": "true",
+      "notes": []
+    },
+    {
+      "id": "re-notmatch",
+      "expr": "$CI_COMMIT_BRANCH !~ /release/",
+      "result": "true",
+      "notes": []
+    },
+    {
+      "id": "re-nil-coerces",
+      "expr": "$CI_COMMIT_TAG =~ /x/",
+      "result": "false",
+      "notes": [],
+      "why": "nil coerces to \"\" on the left"
+    },
+    {
+      "id": "re-nil-empty-anchor",
+      "expr": "$CI_COMMIT_TAG =~ /^$/",
+      "result": "true",
+      "notes": []
+    },
+    {
+      "id": "re-rhs-str",
+      "expr": "$CI_COMMIT_BRANCH =~ \"main\"",
+      "result": "false",
+      "notes": [
+        "the right side of =~ is not a /regex/; GitLab treats the match as false"
+      ],
+      "vars_used": [
+        [
+          "CI_COMMIT_BRANCH",
+          "\"main\""
+        ]
+      ]
+    },
+    {
+      "id": "re-lhs-unknown",
+      "expr": "$MYSTERY =~ /x/",
+      "result": "unknown",
+      "notes": [],
+      "vars_used": [
+        [
+          "MYSTERY",
+          "unknown"
+        ]
+      ]
+    },
+    {
+      "id": "syntax-trailing-op",
+      "expr": "$CI_COMMIT_BRANCH ==",
+      "result": "false",
+      "notes": [],
+      "why": "parses; the missing operand pops as nil"
+    },
+    {
+      "id": "syntax-open-parens",
+      "expr": "(((",
+      "result": "false",
+      "notes": [
+        "expression does not parse (unbalanced parentheses); GitLab evaluates it as false"
+      ]
+    },
+    {
+      "id": "syntax-junk",
+      "expr": "bogus tokens",
+      "result": "false",
+      "notes": [
+        "expression does not parse (unexpected character `b`); GitLab evaluates it as false"
+      ]
+    },
+    {
+      "id": "syntax-empty",
+      "expr": "",
+      "result": "false",
+      "notes": [
+        "expression does not parse (empty expression); GitLab evaluates it as false"
+      ]
+    },
+    {
+      "id": "varsused-order",
+      "expr": "$CI_COMMIT_TAG || $MYSTERY",
+      "result": "unknown",
+      "notes": [],
+      "vars_used": [
+        [
+          "CI_COMMIT_TAG",
+          "unset"
+        ],
+        [
+          "MYSTERY",
+          "unknown"
+        ]
+      ]
+    },
+    {
+      "id": "re-lookahead",
+      "expr": "$CI_COMMIT_BRANCH =~ /(?=x)/",
+      "result": "false",
+      "notes": [
+        "invalid regex /(?=x)/; GitLab evaluates the rule as false"
+      ]
+    },
+    {
+      "id": "re-neg-lookahead",
+      "expr": "$CI_COMMIT_BRANCH =~ /(?!x)/",
+      "result": "false",
+      "notes": [
+        "invalid regex /(?!x)/; GitLab evaluates the rule as false"
+      ]
+    },
+    {
+      "id": "re-lookbehind",
+      "expr": "$CI_COMMIT_BRANCH =~ /(?<=m)a/",
+      "result": "false",
+      "notes": [
+        "invalid regex /(?<=m)a/; GitLab evaluates the rule as false"
+      ]
+    },
+    {
+      "id": "re-backref",
+      "expr": "$CI_COMMIT_BRANCH =~ /(a)\\1/",
+      "result": "false",
+      "notes": [
+        "invalid regex /(a)\\1/; GitLab evaluates the rule as false"
+      ]
+    },
+    {
+      "id": "re-named-backref",
+      "expr": "$CI_COMMIT_BRANCH =~ /(?<x>a)\\k<x>/",
+      "result": "false",
+      "notes": [
+        "invalid regex /(?<x>a)\\k<x>/; GitLab evaluates the rule as false"
+      ]
+    },
+    {
+      "id": "re-Z-rejected",
+      "expr": "$CI_COMMIT_BRANCH =~ /main\\Z/",
+      "result": "false",
+      "notes": [
+        "invalid regex /main\\Z/; GitLab evaluates the rule as false"
+      ]
+    },
+    {
+      "id": "re-unknown-escape",
+      "expr": "$CI_COMMIT_BRANCH =~ /\\h/",
+      "result": "false",
+      "notes": [
+        "invalid regex /\\h/; GitLab evaluates the rule as false"
+      ]
+    },
+    {
+      "id": "re-U-flag",
+      "expr": "$CI_COMMIT_BRANCH =~ /m.*n/U",
+      "result": "true",
+      "notes": [],
+      "why": "U swaps greediness; it never changes whether a match exists"
+    },
+    {
+      "id": "re-inline-i",
+      "expr": "$CI_COMMIT_BRANCH =~ /(?i)MAIN/",
+      "result": "true",
+      "notes": []
+    },
+    {
+      "id": "re-anchors-Az",
+      "expr": "$CI_COMMIT_BRANCH =~ /\\Amain\\z/",
+      "result": "true",
+      "notes": []
+    },
+    {
+      "id": "re-posix",
+      "expr": "$CI_COMMIT_BRANCH =~ /^[[:alpha:]]+$/",
+      "result": "true",
+      "notes": []
+    },
+    {
+      "id": "re-unicode-class",
+      "expr": "$CI_COMMIT_BRANCH =~ /^\\pL+$/",
+      "result": "true",
+      "notes": []
+    },
+    {
+      "id": "re-named-P",
+      "expr": "$CI_COMMIT_BRANCH =~ /(?P<x>ma)in/",
+      "result": "true",
+      "notes": []
+    },
+    {
+      "id": "re-escaped-slash",
+      "expr": "$PATHY =~ /a\\/b/",
+      "result": "true",
+      "notes": []
+    },
+    {
+      "id": "re-empty",
+      "expr": "$CI_COMMIT_BRANCH =~ //",
+      "result": "false",
+      "notes": [
+        "invalid regex //; GitLab evaluates the rule as false"
+      ]
+    },
+    {
+      "id": "re-from-var",
+      "expr": "$CI_COMMIT_BRANCH =~ $PAT",
+      "result": "true",
+      "notes": [],
+      "vars_used": [
+        [
+          "CI_COMMIT_BRANCH",
+          "\"main\""
+        ],
+        [
+          "PAT",
+          "\"/^ma/i\""
+        ]
+      ],
+      "why": "a variable holding /\u2026/flags is compiled too"
+    },
+    {
+      "id": "re-from-var-badflags",
+      "expr": "$CI_COMMIT_BRANCH =~ $BADPAT",
+      "result": "false",
+      "notes": [
+        "invalid regex /a/x; GitLab evaluates the rule as false"
+      ]
+    },
+    {
+      "id": "re-rhs-slash-only",
+      "expr": "$CI_COMMIT_BRANCH =~ $SLASH",
+      "result": "false",
+      "notes": [
+        "the right side of =~ is not a /regex/; GitLab treats the match as false"
+      ]
+    },
+    {
+      "id": "re-rhs-unknown",
+      "expr": "$CI_COMMIT_BRANCH =~ $MYSTERY",
+      "result": "unknown",
+      "notes": []
+    },
+    {
+      "id": "re-lhs-unknown-invalid-rhs",
+      "expr": "$MYSTERY =~ /(?=x)/",
+      "result": "false",
+      "notes": [
+        "invalid regex /(?=x)/; GitLab evaluates the rule as false"
+      ],
+      "vars_used": [
+        [
+          "MYSTERY",
+          "unknown"
+        ]
+      ],
+      "why": "the pattern is validated before the unknown left side is consulted"
+    },
+    {
+      "id": "re-lhs-unknown-str-rhs",
+      "expr": "$MYSTERY =~ \"x\"",
+      "result": "false",
+      "notes": [
+        "the right side of =~ is not a /regex/; GitLab treats the match as false"
+      ]
+    },
+    {
+      "id": "re-lhs-bool",
+      "expr": "true =~ /x/",
+      "result": "false",
+      "notes": [
+        "the left side of =~ is not a string"
+      ]
+    },
+    {
+      "id": "re-lhs-re",
+      "expr": "/a/ =~ /a/",
+      "result": "false",
+      "notes": [
+        "the left side of =~ is not a string"
+      ]
+    },
+    {
+      "id": "present-nel",
+      "expr": "$NEL",
+      "result": "false",
+      "notes": [],
+      "why": "U+0085 is White_Space"
+    },
+    {
+      "id": "present-bom",
+      "expr": "$BOM",
+      "result": "true",
+      "notes": [],
+      "why": "U+FEFF is not White_Space"
+    },
+    {
+      "id": "bool-unknown-and-falsy",
+      "expr": "$MYSTERY && $CI_COMMIT_TAG",
+      "result": "unknown",
+      "notes": []
+    },
+    {
+      "id": "not-not",
+      "expr": "!!$CI_COMMIT_TAG",
+      "result": "false",
+      "notes": []
+    },
+    {
+      "id": "cmp-chained",
+      "expr": "$CI_COMMIT_BRANCH == \"main\" == true",
+      "result": "true",
+      "notes": [],
+      "why": "left-associative"
+    },
+    {
+      "id": "cmp-nil-vs-empty",
+      "expr": "$CI_COMMIT_TAG == \"\"",
+      "result": "false",
+      "notes": []
+    },
+    {
+      "id": "str-single-quote",
+      "expr": "$CI_COMMIT_BRANCH == 'main'",
+      "result": "true",
+      "notes": []
+    },
+    {
+      "id": "str-escape-is-not-escape",
+      "expr": "$CI_COMMIT_BRANCH == \"a\\\"b\"",
+      "result": "false",
+      "notes": [
+        "expression does not parse (unexpected character `b`); GitLab evaluates it as false"
+      ],
+      "why": "GitLab's lexer has no escapes: the string ends at the second quote"
+    },
+    {
+      "id": "syntax-dollar",
+      "expr": "$",
+      "result": "false",
+      "notes": [
+        "expression does not parse (`$` with no variable name); GitLab evaluates it as false"
+      ]
+    },
+    {
+      "id": "syntax-unterminated-str",
+      "expr": "\"abc",
+      "result": "false",
+      "notes": [
+        "expression does not parse (unterminated string); GitLab evaluates it as false"
+      ]
+    },
+    {
+      "id": "syntax-unterminated-re",
+      "expr": "/abc",
+      "result": "false",
+      "notes": [
+        "expression does not parse (unterminated regex); GitLab evaluates it as false"
+      ]
+    },
+    {
+      "id": "syntax-stray-eq",
+      "expr": "$CI_COMMIT_BRANCH = \"main\"",
+      "result": "false",
+      "notes": [
+        "expression does not parse (stray `=`); GitLab evaluates it as false"
+      ]
+    },
+    {
+      "id": "syntax-stray-amp",
+      "expr": "$CI_COMMIT_BRANCH & $EMPTY",
+      "result": "false",
+      "notes": [
+        "expression does not parse (stray `&`); GitLab evaluates it as false"
+      ]
+    },
+    {
+      "id": "syntax-stray-pipe",
+      "expr": "$CI_COMMIT_BRANCH | $EMPTY",
+      "result": "false",
+      "notes": [
+        "expression does not parse (stray `|`); GitLab evaluates it as false"
+      ]
+    },
+    {
+      "id": "syntax-unbalanced-close",
+      "expr": "$CI_COMMIT_BRANCH)",
+      "result": "false",
+      "notes": [
+        "expression does not parse (unbalanced parentheses); GitLab evaluates it as false"
+      ]
+    },
+    {
+      "id": "syntax-unbalanced-open",
+      "expr": "($CI_COMMIT_BRANCH",
+      "result": "false",
+      "notes": [
+        "expression does not parse (unbalanced parentheses); GitLab evaluates it as false"
+      ]
+    },
+    {
+      "id": "syntax-smart-quotes",
+      "expr": "$CI_COMMIT_BRANCH == \u201cmain\u201d",
+      "result": "false",
+      "notes": [
+        "expression does not parse (unexpected character `\u201c`); GitLab evaluates it as false"
+      ],
+      "why": "non-ASCII input must not crash the lexer"
+    },
+    {
+      "id": "syntax-101-tokens",
+      "expr": "$A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A ",
+      "result": "false",
+      "notes": [
+        "expression does not parse (more than 100 tokens); GitLab evaluates it as false"
+      ],
+      "why": "the limit trips when input remains after the 101st token"
+    },
+    {
+      "id": "syntax-101-tokens-no-trailing",
+      "expr": "$A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A || $A",
+      "result": "unknown",
+      "notes": [],
+      "why": "101 tokens with nothing after them slip through the limit"
+    }
+  ]
+}
