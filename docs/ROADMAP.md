@@ -12,25 +12,32 @@ projects.
 The phases below are ordered by value; each is meant to be picked up
 independently.
 
-## Phase A — real `rules:changes` evaluation
+## Phase A — real `rules:changes` evaluation (done)
 
-Today `changes:` clauses are decided by a simulation-wide match / no-match
-assumption. Replace that with a real diff:
+`changes:` clauses are decided against a real diff (`docs/semantics.md`,
+"rules:changes"):
 
-- `glpv scan --diff <base>[..<head>]` (per root pipeline): compute the changed
-  file list via `git diff --name-only` in the pipeline's project at its sha;
-  store it on the pipeline in the graph JSON.
-- Evaluate each `changes:` clause against its actual glob patterns with the
-  existing `glob_to_regex`; the `ChangesChecker` hook already exists in
-  `EvalContext` (native and wasm both consume it).
-- `changes:compare_to` semantics: resolve the named ref and diff against it
-  instead of the default base.
-- Viewer: a "diff" control in the sim bar — pick a base ref (re-diffed at scan
-  time and embedded, or entered as an explicit changed-files list); per-clause
-  ✓/✗ replaces the global assumption wherever a diff is available. The
-  assumption selects stay as the fallback when no diff was provided.
-- The outcome explorer and scenario finder then branch on real per-clause
-  results instead of one global atom.
+- `glpv scan --diff <base>` computes `git diff --name-only --no-renames
+  <base>...<sha>` in every root project (a working-tree scan also counts
+  uncommitted and untracked files); `--changed-file <path>` supplies an
+  explicit list. The list lives on the root pipeline in the graph JSON
+  (`diff.files`); child pipelines inherit it, `compare_to` lists sit on the
+  pipeline that uses them.
+- Patterns match with Ruby `fnmatch` semantics (brace expansion,
+  segment-bound `*`, `**/`, classes, `FNM_DOTMATCH`); variables in patterns
+  and in `compare_to` expand like GitLab's `expand_existing`.
+- `changes:compare_to` diffs against the merge base of the named ref and is
+  decidable without `--diff`.
+- GitLab's push-event rule: tag pushes, schedules, web/api/trigger runs and
+  multi-project pipelines have no changed-paths set, so their plain
+  `changes:` clauses always match.
+- `include:rules:changes` is decided the same way, against the root's diff.
+- The wasm evaluator reads the embedded diff and takes a `changed_files`
+  override for the viewer's simulation.
+
+Leftovers: `changes: {regexp: …}` is parsed but only decided by an empty
+diff; legacy `only:changes`/`except:changes` stay *unknown*; a new-branch
+push (no changed-paths set, like a tag) has no scenario flag of its own.
 
 ## Phase B — viewer navigation and shareable state
 

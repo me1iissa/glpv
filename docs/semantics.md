@@ -158,6 +158,85 @@ otherwise; that setting takes the forms `path/file.yml`,
 external external_pull_request_event parent_pipeline ondemand_dast_scan
 ondemand_dast_validation security_orchestration_policy`
 
+## `rules:changes`
+
+Sources: <https://docs.gitlab.com/ci/yaml/#ruleschanges>,
+<https://docs.gitlab.com/ci/yaml/#ruleschangescompare_to>,
+<https://docs.gitlab.com/ci/yaml/#ruleschangesregexp>,
+<https://docs.gitlab.com/ci/jobs/job_rules/>,
+<https://docs.gitlab.com/ci/yaml/includes/#include-with-ruleschanges>;
+`lib/gitlab/ci/build/rules/rule/clause/changes.rb`,
+`lib/gitlab/ci/config/entry/rules/rule/changes.rb`, `app/models/ci/pipeline.rb`
+(`changed_paths`, `modified_paths_since`), `app/models/ci/bridge.rb`
+(`child_params`).
+
+1. **Evaluation order** (`Clause::Changes#satisfied_by?`): resolve
+   `compare_to` (variables expanded; an unresolvable ref rejects the whole
+   pipeline); take the modified paths — the diff since the merge base of
+   `compare_to`, else the pipeline's `changed_paths`; **no path set ⇒ the
+   clause is true**; an empty set ⇒ false; expand variables in the patterns
+   with `ExpandVariables.expand_existing` (a variable that does not exist
+   stays literal `$NAME`); no patterns ⇒ false; more than 50 000
+   `paths × patterns` comparisons ⇒ true; otherwise any path matches any
+   pattern via `File.fnmatch?(glob, path, FNM_PATHNAME | FNM_DOTMATCH |
+   FNM_EXTGLOB)`. Paths are repository-relative and compared whole: a
+   leading `/` in a pattern never matches (glpv warns,
+   `rules.changes-leading-slash`).
+2. **Push event.** `changed_paths` exists only for a push to an existing
+   branch, a merge request pipeline or an external pull request
+   (`CI_PIPELINE_SOURCE` ∈ `push` (not a tag), `merge_request_event`,
+   `external_pull_request_event`). Tag pushes, new branches (all-zero
+   before-sha), `schedule`, `web`, `api`, `trigger`, `pipeline` and every
+   other source have none ⇒ every `changes:` clause without `compare_to`
+   matches — a `when: never` one included.
+3. **Child pipelines inherit the parent's diff** (`Bridge#child_params`
+   forwards the before/after shas and the merge request); multi-project
+   pipelines get none. `--diff` therefore applies to root pipelines and
+   their children; a reclassified `--all` root (found to be triggered) is
+   treated as downstream.
+4. **`compare_to`** bypasses the push-event rule: the diff is
+   `merge_base(compare_to, sha)..sha` (three-dot), so such clauses are
+   decidable whenever the clone has the ref — no `--diff` needed. The ref
+   may contain variables.
+5. **The push diff** is taken without rename detection (a rename is its old
+   plus its new path); the merge request diff is against the merge base.
+6. **`include:rules`** accept `if`, `exists` and `changes`; `changes` is
+   evaluated against the root pipeline's diff, never the include frame's.
+7. **`changes: {regexp: …}`** (GitLab 19.2) is exclusive with `paths`. glpv
+   parses it but does not match it: an empty diff (or a blanket
+   assumption in the viewer) decides it, anything else stays *unknown*.
+8. **Ruby `fnmatch`** under those flags, as implemented in
+   `glob::changes_glob_to_regex`:
+
+   | pattern element | matches |
+   | --- | --- |
+   | `**/` at the start of a segment | zero or more directories, hidden ones included; consecutive `**/` collapse |
+   | any other run of `*` | within one segment (`[^/]*`): `src/**` is `src/*`, `a**/b` is `a*/b` |
+   | `?` | one character other than `/` |
+   | `[…]`, `[!…]`, `[^…]` | a class that never matches `/`; reversed ranges match nothing; an unterminated `[` makes the pattern unmatchable |
+   | `{a,b}` | brace alternatives, nested, empty ones allowed (`{,jh/}x`); an unmatched `{` matches nothing |
+   | `\x` | the literal `x` |
+   | anything else | literal; whole-path, anchored |
+
+What `glpv` does (`diff.rs`, `source/local.rs`): `--diff <base>` runs
+`git diff --name-only --no-renames <base>...<sha>` in every root project
+(for a working-tree scan: `git diff` against the merge base plus
+`git ls-files --others --exclude-standard`, so uncommitted and untracked
+files count as changed); `--changed-file` supplies the list directly.
+`compare_to` refs are diffed lazily and cached per ref. Outcomes carry a
+note — `matched by <file>`, `no match in N changed file(s)`, `no push event
+for source X; always matches`, `$X unknown` — and the graph JSON records
+the lists under `pipelines[].diff` (`base`, `files` on the owning pipeline;
+`compare_to` per ref).
+
+Deviations: without `--diff` a plain `changes:` clause under a push /
+merge-request scenario stays *unknown* (GitLab always has a diff); a
+new-branch push is not simulated as such; the worktree diff counts
+untracked files, which a real push would only see once committed; a
+`compare_to` ref that does not resolve yields *unknown* plus
+`diff.compare-to-unresolved` where GitLab rejects the pipeline; legacy
+`only:changes`/`except:changes` stay *unknown*.
+
 ## `rules:if` expressions (M4)
 
 Lexer per `lib/gitlab/ci/pipeline/expression/lexer.rb`: `( )`,

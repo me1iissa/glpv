@@ -45,7 +45,13 @@ Progress against the six-milestone plan:
   JS mirror in the viewer for **live simulation**: change the pipeline
   source, ref/tag or any variable and the whole graph re-evaluates
   (downstream pipelines grey out when their trigger stops firing).
-- [ ] M4 (rest) — `rules:changes` via simulated diffs, richer scenario sets.
+- [x] **M4 (`rules:changes`)** — real diffs instead of a global assumption:
+  `--diff <base>` (merge-base diff in every root project) or
+  `--changed-file`, Ruby `fnmatch` pattern semantics, `changes:compare_to`,
+  `include:rules:changes`, and GitLab's push-event rule (tag, schedule,
+  web/api/trigger and downstream pipelines have no diff, so their `changes:`
+  always match). The diff is embedded in the graph JSON for the viewer.
+- [ ] M4 (rest) — richer scenario sets.
 - [ ] M5 — GitLab API source + `glpv check` oracle diffing.
 - [ ] M6 — `serve --watch`, optional ELK layout, docs.
 
@@ -60,6 +66,12 @@ wrote out/mermaid/        # one flowchart per pipeline + overview.mmd
 $ glpv scan --file .gitlab-ci.yml --ref main   # a commit instead of the worktree
 $ glpv resolve --file .gitlab-ci.yml           # fully merged config, like
                                                # `glab ci config compile` but offline
+
+# Decide rules:changes against a real diff (git diff origin/main...<ref>,
+# i.e. since the merge base; untracked files count for a worktree scan),
+# or against an explicit changed-file list:
+$ glpv scan --file .gitlab-ci.yml --diff origin/main -o out/
+$ glpv scan --file .gitlab-ci.yml --changed-file src/main.rs --changed-file docs/x.md
 
 # Cross-project: index a folder of clones and crawl includes + triggers.
 $ glpv index --projects ~/projects
@@ -116,6 +128,11 @@ Fixture repositories are built deterministically from
 `tests/fixtures/projects/*/spec.toml` into `target/glpv-fixtures/`.
 The scalar-typing differential test against PyYAML runs automatically when
 `python3` with PyYAML is available.
+
+The graph JSON is versioned (`schema_version`, currently 1). Within a
+version fields are only ever added, always optional or defaulted (e.g.
+`pipelines[].diff`, `rules[].compare_to`), so consumers should ignore keys
+they do not know.
 
 GitLab semantics implemented here are documented in `docs/semantics.md`,
 with sources. Planned work lives in `docs/ROADMAP.md`.
