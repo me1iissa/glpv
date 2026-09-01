@@ -39,14 +39,11 @@ jobs:
       - name: changelog config (from the default branch when the tag predates it)
         run: test -f cliff.toml || git show "origin/${{ github.event.repository.default_branch }}:cliff.toml" > cliff.toml
       - name: the tag must match the version the commits imply (strict SemVer)
-        uses: orhun/git-cliff-action@v4
-        with:
-          config: cliff.toml
-          args: --bumped-version
         env:
-          OUTPUT: bumped.txt
-      - run: |
-          BUMPED=$(tr -d '[:space:]' < bumped.txt)
+          GIT_CLIFF_VERSION: "2.13.1"
+        run: |
+          curl -sSfL "https://github.com/orhun/git-cliff/releases/download/v$GIT_CLIFF_VERSION/git-cliff-$GIT_CLIFF_VERSION-x86_64-unknown-linux-musl.tar.gz" | tar -xz
+          BUMPED=$("./git-cliff-$GIT_CLIFF_VERSION/git-cliff" --bumped-version)
           echo "version implied by the commits: $BUMPED"
           test "$BUMPED" = "$TAG"
 
