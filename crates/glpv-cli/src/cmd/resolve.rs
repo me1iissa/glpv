@@ -46,6 +46,7 @@ pub fn run(args: ResolveArgs) -> anyhow::Result<()> {
         max_pipelines: 1,
         diff: None,
         changed_files: vec![],
+        inputs: vec![],
         clone_missing: false,
     };
     let (output, _setup) = super::scan::run_scan(&scan_args, &scenario, &opts, vec![])?;

@@ -1,0 +1,82 @@
+---
+source: crates/glpv-cli/tests/snapshots.rs
+expression: mermaid
+---
+### overview.mmd
+flowchart LR
+    subgraph prj0["fixtures.local/fx/inputs"]
+        direction TB
+        ov0["pipeline @ main (3 jobs)"]
+        ov1["child @ main (1 jobs)"]
+        ov2["child @ main (1 jobs)"]
+    end
+    ov0 == "child-default" ==> ov1
+    ov0 == "child-prod" ==> ov2
+
+### combined.mmd
+flowchart LR
+    subgraph prj0["fixtures.local/fx/inputs"]
+        direction LR
+        subgraph prj0p0["pipeline @ main — .gitlab-ci.yml"]
+            direction LR
+            subgraph prj0p0s1["test"]
+                direction TB
+                n0["check"]
+            end
+            subgraph prj0p0s2["deploy"]
+                direction TB
+                n1["child-default"]
+                n2["child-prod"]
+            end
+        end
+        subgraph prj0p1["child @ main — trigger:include via child-default"]
+            direction LR
+            subgraph prj0p1s2["test"]
+                direction TB
+                n3[/"deploy-staging"/]
+            end
+        end
+        subgraph prj0p2["child @ main — trigger:include via child-prod"]
+            direction LR
+            subgraph prj0p2s2["test"]
+                direction TB
+                n4[/"deploy-production"/]
+            end
+        end
+    end
+    n1 == "trigger" ==> prj0p1
+    n2 == "trigger" ==> prj0p2
+
+### p-62155f15e291ba3a.mmd
+flowchart LR
+    %% fixtures.local/fx/inputs @ main — .gitlab-ci.yml
+    %% n0 = check
+    %% n1 = child-default
+    %% n2 = child-prod
+    subgraph s1["test"]
+        direction TB
+        n0["check"]
+    end
+    subgraph s2["deploy"]
+        direction TB
+        n1["child-default"]
+        n2["child-prod"]
+    end
+
+### p-dc6e01a0b48c5dfe.mmd
+flowchart LR
+    %% fixtures.local/fx/inputs @ main — trigger:include via child-default
+    %% n0 = deploy-staging
+    subgraph s2["test"]
+        direction TB
+        n0[/"deploy-staging"/]
+    end
+
+### p-acb620b3f2eb2058.mmd
+flowchart LR
+    %% fixtures.local/fx/inputs @ main — trigger:include via child-prod
+    %% n0 = deploy-production
+    subgraph s2["test"]
+        direction TB
+        n0[/"deploy-production"/]
+    end

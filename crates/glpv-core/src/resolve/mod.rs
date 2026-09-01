@@ -114,6 +114,9 @@ pub fn resolve_pipeline(
         order_counter: 0,
         diff: req.diff.clone(),
         push_event: req.push_event,
+        spec_inputs: Vec::new(),
+        last_spec_inputs: Vec::new(),
+        child_entry_file: None,
     };
 
     let make_pipeline = |st: &ResolveState<'_>,
@@ -139,6 +142,7 @@ pub fn resolve_pipeline(
             unresolved,
             parent: req.parent.clone(),
             depth: req.depth,
+            spec_inputs: st.spec_inputs.clone(),
             includes: st
                 .include_files
                 .iter()
@@ -256,6 +260,7 @@ pub fn resolve_pipeline(
             };
             st.stack.push(frame.stack_key());
             let body = document::load_document(&mut st, entry_file, &text, &req.inputs);
+            st.spec_inputs = std::mem::take(&mut st.last_spec_inputs);
             let Some(body) = body else {
                 return fail(
                     &mut st,
@@ -281,6 +286,7 @@ pub fn resolve_pipeline(
                 file_path: from_path.clone(),
             };
             let body = Node::map(glpv_yaml::Map::default(), include_node.span);
+            st.child_entry_file = Some(*from_file);
             (
                 includes::expand_include_node(&mut st, body, include_node, &frame, &vars),
                 frame,

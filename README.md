@@ -222,7 +222,10 @@ Progress against the six-milestone plan:
   project lanes → pipeline cards → stage columns → job pills, SVG needs/
   trigger edges (dotted when rule-gated, labelled with the gating condition),
   pan/zoom, click-through to rule traces, provenance (file:line opens the
-  embedded source) and effective YAML; job/pipeline/stage search (`/`) and
+  embedded source) and effective YAML; `needs` checked against the simulation
+  (a need that rules leave out of the pipeline is flagged, unless optional),
+  `allow_failure` on pills (⚠) and in the panel, the pipeline's `spec:inputs`
+  with the values in effect; job/pipeline/stage search (`/`) and
   shareable links (the simulation, selection, edge mode and camera live in
   the URL hash — "copy link"); an optional "stack children" toggle folds runs
   of near-identical child pipelines into one expandable card; a "changed
@@ -272,6 +275,10 @@ $ glpv resolve --file .gitlab-ci.yml           # fully merged config, like
 # or against an explicit changed-file list:
 $ glpv scan --file .gitlab-ci.yml --diff origin/main -o out/
 $ glpv scan --file .gitlab-ci.yml --changed-file src/main.rs --changed-file docs/x.md
+
+# spec:inputs of the entry file (values are strings; defaults apply otherwise).
+# Every pipeline records its declared inputs and the values in effect.
+$ glpv scan --file .gitlab-ci.yml --input environment=production -o out/
 
 # Cross-project: index a folder of clones and crawl includes + triggers.
 $ glpv index --projects ~/projects

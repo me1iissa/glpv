@@ -135,6 +135,53 @@ for (const sample of SAMPLES) {
       }
 
       if (sample === FIXTURES) {
+        test("panel: allow_failure in the header, needs checked against the simulation", () => {
+          const rel = jobId(G, "fx/legacy", "release");
+          if (glpv.selectedJob !== rel) glpv.selectJob(rel);
+          assert.match(glpv.panel.querySelector(".sub").textContent, /allowed to fail on exit codes 42, 137/);
+          // `deploy` needs an optional job that does not exist: noted, not fatal
+          const dep = jobId(G, "fx/app", "deploy");
+          glpv.selectJob(dep);
+          const notes = [...glpv.panel.querySelectorAll(".prov-list .note")].map((e) => e.textContent);
+          assert.ok(notes.some((t) => /no such job in this pipeline; ignored \(optional\)/.test(t)), notes.join(" | "));
+          assert.equal(glpv.panel.querySelector(".prov-list .warn"), null);
+          // `bad-needs` needs `deploy`, which the push simulation leaves out
+          const bad = jobId(G, "fx/app", "bad-needs");
+          glpv.selectJob(bad);
+          assert.equal(glpv.lastEval().jobEval.get(dep).outcome, "skipped");
+          const warns = [...glpv.panel.querySelectorAll(".prov-list .warn")].map((e) => e.textContent);
+          assert.ok(warns.some((t) => /undefined need/.test(t)), warns.join(" | "));
+          // the need is a link to the job
+          const link = [...glpv.panel.querySelectorAll(".prov-list .loc-link")].find((b) => b.textContent === "deploy");
+          assert.ok(link, "need rendered as a link");
+          link.click();
+          assert.equal(glpv.selectedJob, dep);
+          clean();
+        });
+
+        test("panel: the pipeline's spec:inputs with the values in effect", () => {
+          const check = jobId(G, "fx/inputs", "check");
+          glpv.selectJob(check);
+          let h3s = [...glpv.panel.querySelectorAll("h3")].map((h) => h.textContent);
+          assert.ok(h3s.includes("Pipeline inputs (spec:inputs)"), h3s.join(" | "));
+          let rows = [...glpv.panel.querySelectorAll("table.kv tr")].map((tr) => [...tr.children].map((td) => td.textContent));
+          const stage = rows.find((r) => r[0] === "stage");
+          assert.ok(stage && /^test \(default\)/.test(stage[1]), JSON.stringify(rows));
+          const verbose = rows.find((r) => r[0] === "verbose : boolean");
+          assert.ok(verbose && /^false \(default\)/.test(verbose[1]), JSON.stringify(rows));
+          // the child triggered with inputs shows what it received
+          const prodPipe = G.pipelines.find((x) => x.project.path === "fx/inputs" && x.parent && x.parent[1] === "child-prod");
+          assert.ok(prodPipe, "child-prod pipeline");
+          const prod = prodPipe.jobs.find((j) => j.name === "deploy-production").id;
+          glpv.selectJob(prod);
+          rows = [...glpv.panel.querySelectorAll("table.kv tr")].map((tr) => [...tr.children].map((td) => td.textContent));
+          const env = rows.find((r) => r[0] === "env");
+          assert.ok(env && /^production \(provided\) · options: staging, production — Deployment environment$/.test(env[1]), JSON.stringify(rows));
+          const replicas = rows.find((r) => r[0] === "replicas : number");
+          assert.ok(replicas && /^5 \(provided\)/.test(replicas[1]), JSON.stringify(rows));
+          clean();
+        });
+
         test("selecting a job renders its panel", async () => {
           const id = jobId(G, "fx/sim", "deploy-prod");
           glpv.selectJob(id);

@@ -354,6 +354,9 @@ button.explore:hover { filter: brightness(1.06); }
 
 .prov-list { list-style: none; padding: 0; margin: 0; font-size: 12.5px; }
 .prov-list li { padding: 5px 0; border-bottom: 1px dashed var(--line); }
+.prov-list .warn, .prov-list .note { display: block; margin-top: 3px; font-size: 12px; }
+.prov-list .warn { color: var(--warn); }
+.prov-list .note { color: var(--muted); }
 .prov-list .via {
   font-size: 10px;
   font-weight: 700;

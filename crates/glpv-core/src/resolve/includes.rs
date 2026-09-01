@@ -1280,6 +1280,12 @@ fn expand_text(
     // see the root project's CI_PROJECT_* values even in a switched frame.
     st.stack.push(key);
     let body = load_document(st, file_id, &text, &spec.inputs);
+    if st.child_entry_file == Some(parent_frame.file) {
+        // A file the trigger includes directly is one of the child's entry
+        // documents: its `spec:inputs` are the child pipeline's.
+        let metas = std::mem::take(&mut st.last_spec_inputs);
+        st.spec_inputs.extend(metas);
+    }
     let result = body.map(|b| expand_includes(st, b, &child_frame, vars));
     st.stack.pop();
     result

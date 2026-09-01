@@ -20,6 +20,9 @@ pub struct ResolveOpts {
     /// The changed files `rules:changes` is evaluated against in every root
     /// project (`None`: clauses without `compare_to` stay undecided).
     pub diff: Option<DiffSpec>,
+    /// `spec:inputs` values for the entry file of an entry scan (`--input`),
+    /// taken as strings.
+    pub root_inputs: indexmap::IndexMap<String, String>,
 }
 
 impl Default for ResolveOpts {
@@ -31,6 +34,7 @@ impl Default for ResolveOpts {
             max_pipelines: 200,
             full_provenance: false,
             diff: None,
+            root_inputs: indexmap::IndexMap::new(),
         }
     }
 }
@@ -83,6 +87,14 @@ pub struct ResolveState<'a> {
     pub diff: Option<Arc<DiffOracle>>,
     /// See `EvalContext::push_event`.
     pub push_event: bool,
+    /// The entry file's `spec:inputs` (see `model::SpecInputMeta`).
+    pub spec_inputs: Vec<model::SpecInputMeta>,
+    /// The `spec:inputs` of the document `load_document` parsed last.
+    pub last_spec_inputs: Vec<model::SpecInputMeta>,
+    /// For a `trigger:include` child: the parent's file the include list
+    /// came from. The files it includes directly are the child's entry
+    /// documents, whose `spec:inputs` are the child's.
+    pub child_entry_file: Option<FileId>,
 }
 
 impl ResolveState<'_> {

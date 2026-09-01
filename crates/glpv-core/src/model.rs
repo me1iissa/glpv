@@ -138,6 +138,31 @@ pub struct Pipeline {
     pub depth: u32,
     /// Files merged into this pipeline's configuration, in merge order.
     pub includes: Vec<u32>,
+    /// `spec:inputs` declared by the entry file, with the values in effect.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spec_inputs: Vec<SpecInputMeta>,
+}
+
+/// One `spec:inputs` declaration of a pipeline's entry file and the value
+/// it resolved to for that pipeline.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SpecInputMeta {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<serde_json::Value>,
+    /// The value in effect: provided by the trigger, include or `--input`,
+    /// else the default. `None` when neither exists (an error).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<serde_json::Value>,
+    /// Whether `value` was supplied rather than defaulted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub provided: bool,
 }
 
 /// Changed files of the event that would create a pipeline, plus the

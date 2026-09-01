@@ -68,6 +68,7 @@ pub fn load_document(
             let spec_inputs = parse_spec_inputs(st, &header);
             match spec_inputs {
                 Some(spec) => {
+                    st.last_spec_inputs = spec_metas(&spec, provided_inputs);
                     let resolved = resolve_inputs(st, &spec, provided_inputs);
                     Some(interpolate(st, body, &resolved, provided_inputs, true))
                 }
@@ -88,7 +89,31 @@ pub struct SpecInput {
     pub name: String,
     pub default: Option<Node>,
     pub input_type: Option<String>,
+    pub description: Option<String>,
+    pub options: Vec<Node>,
     pub span: crate::model::Span,
+}
+
+/// The graph's record of a spec: each input with the value in effect.
+fn spec_metas(
+    spec: &[SpecInput],
+    provided: &IndexMap<String, Node>,
+) -> Vec<crate::model::SpecInputMeta> {
+    use crate::util::node_to_json;
+    spec.iter()
+        .map(|i| {
+            let given = provided.get(&i.name);
+            crate::model::SpecInputMeta {
+                name: i.name.clone(),
+                input_type: i.input_type.clone(),
+                default: i.default.as_ref().map(node_to_json),
+                description: i.description.clone(),
+                options: i.options.iter().map(node_to_json).collect(),
+                value: given.or(i.default.as_ref()).map(node_to_json),
+                provided: given.is_some(),
+            }
+        })
+        .collect()
 }
 
 fn parse_spec_inputs(st: &mut ResolveState<'_>, header: &Node) -> Option<Vec<SpecInput>> {
@@ -111,17 +136,24 @@ fn parse_spec_inputs(st: &mut ResolveState<'_>, header: &Node) -> Option<Vec<Spe
         return Some(out);
     };
     for (name, entry) in inputs_map.iter() {
-        let (default, input_type) = match entry.value.as_map() {
+        let (default, input_type, description, options) = match entry.value.as_map() {
             Some(opts) => (
                 opts.get("default").cloned(),
                 opts.get("type").and_then(|t| t.scalar_text()),
+                opts.get("description").and_then(|t| t.scalar_text()),
+                match opts.get("options").map(|o| &o.kind) {
+                    Some(Kind::Seq(items)) => items.clone(),
+                    _ => Vec::new(),
+                },
             ),
-            None => (None, None),
+            None => (None, None, None, Vec::new()),
         };
         out.push(SpecInput {
             name: name.to_string(),
             default,
             input_type,
+            description,
+            options,
             span: entry.key_span.into(),
         });
     }

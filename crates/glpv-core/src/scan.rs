@@ -179,6 +179,7 @@ impl<'a> GraphBuilder<'a> {
             parent: Some(parent),
             depth,
             includes: Vec::new(),
+            spec_inputs: Vec::new(),
         });
         self.ctxs.push(PipeCtx {
             project: None,
@@ -1115,6 +1116,17 @@ fn unresolved_trigger_code(reason: UnresolvedReason) -> &'static str {
     }
 }
 
+/// `--input` values for the entry file, as YAML string scalars.
+fn root_inputs(opts: &ResolveOpts) -> IndexMap<String, glpv_yaml::Node> {
+    opts.root_inputs
+        .iter()
+        .map(|(k, v)| {
+            let span = glpv_yaml::Span::point(glpv_yaml::FileId(u32::MAX), 0, 0);
+            (k.clone(), glpv_yaml::Node::str(v.clone(), span))
+        })
+        .collect()
+}
+
 /// Crawl starting from an already-located entry project.
 #[allow(clippy::too_many_arguments)]
 pub fn scan_entry(
@@ -1146,7 +1158,7 @@ pub fn scan_entry(
         kind: PipelineKind::Root,
         depth: 0,
         parent: None,
-        inputs: IndexMap::new(),
+        inputs: root_inputs(opts),
         diff: Some(diff),
         diff_inherited: false,
         push_event: has_push_event(&scenario.source, scenario.is_tag),

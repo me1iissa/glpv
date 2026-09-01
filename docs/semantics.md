@@ -15,7 +15,12 @@ four real single-file projects, modulo `.pre`/`.post` appearing in the server's
 From `lib/gitlab/ci/config.rb#build_config`:
 
 1. `spec:inputs` interpolation (`$[[ inputs.x ]]`; the `spec` header is a
-   separate first YAML document, `MAX_DOCUMENTS = 2`)
+   separate first YAML document, `MAX_DOCUMENTS = 2`). Each pipeline records
+   the inputs its entry document(s) declare — name, type, default, options,
+   description — with the value in effect (`spec_inputs` in the graph JSON):
+   a trigger's or include's `inputs:`, `--input NAME=VALUE` for the entry
+   file of a scan, else the default. For a `trigger:include` child the entry
+   documents are the files the trigger includes directly.
 2. `include` expansion and merge (`Config::External::Processor`)
 3. `extends` resolution (`Config::Extendable`)
 4. `!reference` resolution (`Config::Yaml::Tags::Resolver`)

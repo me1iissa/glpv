@@ -1,0 +1,61 @@
+# `spec:inputs`: declared inputs with types, defaults, options and a
+# description; interpolation in job names, keys and rules; a child pipeline
+# that receives inputs from its trigger and one that runs on the defaults.
+dir = "inputs-project"
+remote = "git@fixtures.local:fx/inputs.git"
+default_branch = "main"
+
+[[commits]]
+message = "typed inputs"
+
+[commits.files]
+"ci/child.yml" = '''
+spec:
+  inputs:
+    env:
+      default: staging
+      options: [staging, production]
+      description: Deployment environment
+    replicas:
+      type: number
+      default: 2
+---
+deploy-$[[ inputs.env ]]:
+  script:
+    - echo deploy $[[ inputs.env ]] with $[[ inputs.replicas ]] replicas
+  rules:
+    - if: '"$[[ inputs.env ]]" == "production"'
+      when: manual
+    - when: on_success
+'''
+".gitlab-ci.yml" = '''
+spec:
+  inputs:
+    stage:
+      default: test
+      description: Stage of the check job
+    verbose:
+      type: boolean
+      default: false
+---
+stages: [test, deploy]
+
+check:
+  stage: $[[ inputs.stage ]]
+  script:
+    - echo verbose=$[[ inputs.verbose ]]
+
+child-default:
+  stage: deploy
+  trigger:
+    include: ci/child.yml
+
+child-prod:
+  stage: deploy
+  trigger:
+    include:
+      - local: ci/child.yml
+        inputs:
+          env: production
+          replicas: 5
+'''

@@ -1,0 +1,592 @@
+---
+source: crates/glpv-cli/tests/snapshots.rs
+expression: value
+---
+{
+  "schema_version": 1,
+  "generated_at": "[timestamp]",
+  "tool": {
+    "name": "glpv",
+    "version": "[version]",
+    "args": []
+  },
+  "scenarios": [
+    {
+      "id": "push@default",
+      "source": "push",
+      "git_ref": null,
+      "vars": {}
+    }
+  ],
+  "pipelines": [
+    {
+      "id": "p-62155f15e291ba3a",
+      "kind": "root",
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/inputs",
+        "path_lc": "fx/inputs"
+      },
+      "git_ref": "main",
+      "sha": "190efcf1b80d7308ec3ca437d9de2591cd53452b",
+      "config_path": ".gitlab-ci.yml",
+      "default_branch": "main",
+      "entry_source": 0,
+      "stages": [
+        ".pre",
+        "test",
+        "deploy",
+        ".post"
+      ],
+      "jobs": [
+        {
+          "id": "p-62155f15e291ba3a/check",
+          "name": "check",
+          "stage": "test",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "none"
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                12,
+                1
+              ],
+              "end": [
+                12,
+                6
+              ]
+            }
+          },
+          "merged_yaml": "stage: test\nscript:\n  - echo verbose=false\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "runs"
+            }
+          ]
+        },
+        {
+          "id": "p-62155f15e291ba3a/child-default",
+          "name": "child-default",
+          "stage": "deploy",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "none"
+          },
+          "trigger": {
+            "kind": {
+              "type": "child",
+              "includes": [
+                "ci/child.yml"
+              ]
+            },
+            "forward": {
+              "yaml_variables": true,
+              "pipeline_variables": false
+            },
+            "target": "p-dc6e01a0b48c5dfe"
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                17,
+                1
+              ],
+              "end": [
+                17,
+                14
+              ]
+            }
+          },
+          "merged_yaml": "stage: deploy\ntrigger:\n  include: ci/child.yml\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "runs"
+            }
+          ]
+        },
+        {
+          "id": "p-62155f15e291ba3a/child-prod",
+          "name": "child-prod",
+          "stage": "deploy",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "none"
+          },
+          "trigger": {
+            "kind": {
+              "type": "child",
+              "includes": [
+                {
+                  "local": "ci/child.yml",
+                  "inputs": {
+                    "env": "production",
+                    "replicas": 5
+                  }
+                }
+              ]
+            },
+            "forward": {
+              "yaml_variables": true,
+              "pipeline_variables": false
+            },
+            "target": "p-acb620b3f2eb2058"
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 0,
+              "start": [
+                22,
+                1
+              ],
+              "end": [
+                22,
+                11
+              ]
+            }
+          },
+          "merged_yaml": "stage: deploy\ntrigger:\n  include:\n    - local: ci/child.yml\n      inputs:\n        env: production\n        replicas: 5\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "runs"
+            }
+          ]
+        }
+      ],
+      "depth": 0,
+      "includes": [
+        0
+      ],
+      "spec_inputs": [
+        {
+          "name": "stage",
+          "default": "test",
+          "description": "Stage of the check job",
+          "value": "test"
+        },
+        {
+          "name": "verbose",
+          "input_type": "boolean",
+          "default": false,
+          "value": false
+        }
+      ]
+    },
+    {
+      "id": "p-dc6e01a0b48c5dfe",
+      "kind": "child",
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/inputs",
+        "path_lc": "fx/inputs"
+      },
+      "git_ref": "main",
+      "sha": "190efcf1b80d7308ec3ca437d9de2591cd53452b",
+      "config_path": "trigger:include via child-default",
+      "default_branch": "main",
+      "stages": [
+        ".pre",
+        "build",
+        "test",
+        "deploy",
+        ".post"
+      ],
+      "jobs": [
+        {
+          "id": "p-dc6e01a0b48c5dfe/deploy-staging",
+          "name": "deploy-staging",
+          "stage": "test",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "manual",
+            "rules": [
+              {
+                "if": "\"staging\" == \"production\"",
+                "when": "manual",
+                "span": {
+                  "file": 1,
+                  "start": [
+                    15,
+                    7
+                  ],
+                  "end": [
+                    17,
+                    5
+                  ]
+                }
+              },
+              {
+                "when": "on_success",
+                "span": {
+                  "file": 1,
+                  "start": [
+                    17,
+                    7
+                  ],
+                  "end": [
+                    18,
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 1,
+              "start": [
+                11,
+                1
+              ],
+              "end": [
+                11,
+                25
+              ]
+            }
+          },
+          "merged_yaml": "script:\n  - echo deploy staging with 2 replicas\nrules:\n  - if: \"\\\"staging\\\" == \\\"production\\\"\"\n    when: manual\n  - when: on_success\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "runs",
+              "trace": [
+                {
+                  "index": 0,
+                  "result": "no_match",
+                  "clause": "if: \"staging\" == \"production\"",
+                  "when": "manual"
+                },
+                {
+                  "index": 1,
+                  "result": "matched",
+                  "clause": "(always)",
+                  "when": "on_success"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "parent": [
+        "p-62155f15e291ba3a",
+        "child-default"
+      ],
+      "depth": 1,
+      "includes": [
+        1
+      ],
+      "spec_inputs": [
+        {
+          "name": "env",
+          "default": "staging",
+          "description": "Deployment environment",
+          "options": [
+            "staging",
+            "production"
+          ],
+          "value": "staging"
+        },
+        {
+          "name": "replicas",
+          "input_type": "number",
+          "default": 2,
+          "value": 2
+        }
+      ]
+    },
+    {
+      "id": "p-acb620b3f2eb2058",
+      "kind": "child",
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/inputs",
+        "path_lc": "fx/inputs"
+      },
+      "git_ref": "main",
+      "sha": "190efcf1b80d7308ec3ca437d9de2591cd53452b",
+      "config_path": "trigger:include via child-prod",
+      "default_branch": "main",
+      "stages": [
+        ".pre",
+        "build",
+        "test",
+        "deploy",
+        ".post"
+      ],
+      "jobs": [
+        {
+          "id": "p-acb620b3f2eb2058/deploy-production",
+          "name": "deploy-production",
+          "stage": "test",
+          "needs": [],
+          "when": "on_success",
+          "allow_failure": {
+            "bool": false
+          },
+          "rules": {
+            "mode": "manual",
+            "rules": [
+              {
+                "if": "\"production\" == \"production\"",
+                "when": "manual",
+                "span": {
+                  "file": 2,
+                  "start": [
+                    15,
+                    7
+                  ],
+                  "end": [
+                    17,
+                    5
+                  ]
+                }
+              },
+              {
+                "when": "on_success",
+                "span": {
+                  "file": 2,
+                  "start": [
+                    17,
+                    7
+                  ],
+                  "end": [
+                    18,
+                    1
+                  ]
+                }
+              }
+            ]
+          },
+          "provenance": {
+            "defined_at": {
+              "file": 2,
+              "start": [
+                11,
+                1
+              ],
+              "end": [
+                11,
+                25
+              ]
+            }
+          },
+          "merged_yaml": "script:\n  - echo deploy production with 5 replicas\nrules:\n  - if: \"\\\"production\\\" == \\\"production\\\"\"\n    when: manual\n  - when: on_success\n",
+          "evaluations": [
+            {
+              "scenario_id": "push@default",
+              "outcome": "manual",
+              "trace": [
+                {
+                  "index": 0,
+                  "result": "matched",
+                  "clause": "if: \"production\" == \"production\"",
+                  "when": "manual"
+                },
+                {
+                  "index": 1,
+                  "result": "not_reached",
+                  "clause": "(always)",
+                  "when": "on_success"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "parent": [
+        "p-62155f15e291ba3a",
+        "child-prod"
+      ],
+      "depth": 1,
+      "includes": [
+        2
+      ],
+      "spec_inputs": [
+        {
+          "name": "env",
+          "default": "staging",
+          "description": "Deployment environment",
+          "options": [
+            "staging",
+            "production"
+          ],
+          "value": "production",
+          "provided": true
+        },
+        {
+          "name": "replicas",
+          "input_type": "number",
+          "default": 2,
+          "value": 5,
+          "provided": true
+        }
+      ]
+    }
+  ],
+  "trigger_edges": [
+    {
+      "from_job": "p-62155f15e291ba3a/child-default",
+      "to_pipeline": "p-dc6e01a0b48c5dfe",
+      "span": {
+        "file": 0,
+        "start": [
+          17,
+          1
+        ],
+        "end": [
+          17,
+          14
+        ]
+      }
+    },
+    {
+      "from_job": "p-62155f15e291ba3a/child-prod",
+      "to_pipeline": "p-acb620b3f2eb2058",
+      "span": {
+        "file": 0,
+        "start": [
+          22,
+          1
+        ],
+        "end": [
+          22,
+          11
+        ]
+      }
+    }
+  ],
+  "include_files": [
+    {
+      "file": 0,
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/inputs",
+        "path_lc": "fx/inputs"
+      },
+      "sha": "190efcf1b80d7308ec3ca437d9de2591cd53452b",
+      "path": ".gitlab-ci.yml",
+      "kind": "entry",
+      "location": ".gitlab-ci.yml"
+    },
+    {
+      "file": 1,
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/inputs",
+        "path_lc": "fx/inputs"
+      },
+      "sha": "190efcf1b80d7308ec3ca437d9de2591cd53452b",
+      "path": "ci/child.yml",
+      "kind": "local",
+      "location": "ci/child.yml"
+    },
+    {
+      "file": 2,
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/inputs",
+        "path_lc": "fx/inputs"
+      },
+      "sha": "190efcf1b80d7308ec3ca437d9de2591cd53452b",
+      "path": "ci/child.yml",
+      "kind": "local",
+      "location": "ci/child.yml"
+    }
+  ],
+  "include_edges": [
+    {
+      "from": 0,
+      "to": 1,
+      "location": "ci/child.yml",
+      "order": 0,
+      "span": {
+        "file": 0,
+        "start": [
+          20,
+          14
+        ],
+        "end": [
+          20,
+          26
+        ]
+      },
+      "pipeline": "p-dc6e01a0b48c5dfe"
+    },
+    {
+      "from": 0,
+      "to": 2,
+      "location": "ci/child.yml",
+      "order": 0,
+      "span": {
+        "file": 0,
+        "start": [
+          26,
+          9
+        ],
+        "end": [
+          30,
+          1
+        ]
+      },
+      "pipeline": "p-acb620b3f2eb2058"
+    }
+  ],
+  "diagnostics": [],
+  "sources": [
+    {
+      "file": 0,
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/inputs",
+        "path_lc": "fx/inputs"
+      },
+      "sha": "190efcf1b80d7308ec3ca437d9de2591cd53452b",
+      "path": ".gitlab-ci.yml",
+      "text": "spec:\n  inputs:\n    stage:\n      default: test\n      description: Stage of the check job\n    verbose:\n      type: boolean\n      default: false\n---\nstages: [test, deploy]\n\ncheck:\n  stage: $[[ inputs.stage ]]\n  script:\n    - echo verbose=$[[ inputs.verbose ]]\n\nchild-default:\n  stage: deploy\n  trigger:\n    include: ci/child.yml\n\nchild-prod:\n  stage: deploy\n  trigger:\n    include:\n      - local: ci/child.yml\n        inputs:\n          env: production\n          replicas: 5\n"
+    },
+    {
+      "file": 1,
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/inputs",
+        "path_lc": "fx/inputs"
+      },
+      "sha": "190efcf1b80d7308ec3ca437d9de2591cd53452b",
+      "path": "ci/child.yml",
+      "text": "spec:\n  inputs:\n    env:\n      default: staging\n      options: [staging, production]\n      description: Deployment environment\n    replicas:\n      type: number\n      default: 2\n---\ndeploy-$[[ inputs.env ]]:\n  script:\n    - echo deploy $[[ inputs.env ]] with $[[ inputs.replicas ]] replicas\n  rules:\n    - if: '\"$[[ inputs.env ]]\" == \"production\"'\n      when: manual\n    - when: on_success\n"
+    },
+    {
+      "file": 2,
+      "project": {
+        "host": "fixtures.local",
+        "path": "fx/inputs",
+        "path_lc": "fx/inputs"
+      },
+      "sha": "190efcf1b80d7308ec3ca437d9de2591cd53452b",
+      "path": "ci/child.yml",
+      "text": "spec:\n  inputs:\n    env:\n      default: staging\n      options: [staging, production]\n      description: Deployment environment\n    replicas:\n      type: number\n      default: 2\n---\ndeploy-$[[ inputs.env ]]:\n  script:\n    - echo deploy $[[ inputs.env ]] with $[[ inputs.replicas ]] replicas\n  rules:\n    - if: '\"$[[ inputs.env ]]\" == \"production\"'\n      when: manual\n    - when: on_success\n"
+    }
+  ]
+}

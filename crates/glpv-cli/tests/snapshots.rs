@@ -360,3 +360,76 @@ fn fx_forward() {
     // the forward flags travel in the graph JSON
     insta::assert_json_snapshot!("forward_edges", graph.trigger_edges);
 }
+
+#[test]
+fn fx_inputs() {
+    use glpv_core::model::PipelineKind;
+    let output = scan_fixture("inputs");
+    let graph = &output.graph;
+    let root = graph
+        .pipelines
+        .iter()
+        .find(|p| p.kind == PipelineKind::Root)
+        .unwrap();
+    let names: Vec<&str> = root.spec_inputs.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(names, ["stage", "verbose"]);
+    assert!(root.spec_inputs.iter().all(|i| !i.provided));
+    assert_eq!(root.spec_inputs[0].value, Some(serde_json::json!("test")));
+    assert_eq!(root.spec_inputs[1].input_type.as_deref(), Some("boolean"));
+    let child = |bridge: &str| {
+        graph
+            .pipelines
+            .iter()
+            .find(|p| p.parent.as_ref().is_some_and(|(_, b)| b == bridge))
+            .unwrap()
+    };
+    let prod = child("child-prod");
+    let env = prod.spec_inputs.iter().find(|i| i.name == "env").unwrap();
+    assert_eq!(env.value, Some(serde_json::json!("production")));
+    assert!(env.provided);
+    assert_eq!(
+        env.options,
+        vec![
+            serde_json::json!("staging"),
+            serde_json::json!("production")
+        ]
+    );
+    assert_eq!(env.description.as_deref(), Some("Deployment environment"));
+    assert!(prod.jobs.iter().any(|j| j.name == "deploy-production"));
+    let dflt = child("child-default");
+    assert!(dflt.jobs.iter().any(|j| j.name == "deploy-staging"));
+    assert!(
+        !dflt
+            .spec_inputs
+            .iter()
+            .find(|i| i.name == "env")
+            .unwrap()
+            .provided
+    );
+    snapshot_graph("inputs", &output);
+
+    // `--input` supplies the entry file's inputs.
+    let mut opts = ResolveOpts::default();
+    opts.root_inputs
+        .insert("verbose".to_string(), "true".to_string());
+    let output = scan_fixture_with("inputs", opts, Scenario::push_default());
+    let root = output
+        .graph
+        .pipelines
+        .iter()
+        .find(|p| p.kind == PipelineKind::Root)
+        .unwrap();
+    let verbose = root
+        .spec_inputs
+        .iter()
+        .find(|i| i.name == "verbose")
+        .unwrap();
+    assert!(verbose.provided);
+    assert_eq!(verbose.value, Some(serde_json::json!("true")));
+    let check = root.jobs.iter().find(|j| j.name == "check").unwrap();
+    assert!(
+        check.merged_yaml.contains("verbose=true"),
+        "{}",
+        check.merged_yaml
+    );
+}

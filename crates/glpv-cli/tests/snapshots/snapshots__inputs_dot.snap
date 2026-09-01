@@ -1,0 +1,48 @@
+---
+source: crates/glpv-cli/tests/snapshots.rs
+expression: "glpv_render::render_dot(&output.graph)"
+---
+digraph glpv {
+  rankdir=LR;
+  compound=true;
+  newrank=true;
+  graph [fontname="Helvetica"];
+  node [shape=box style="rounded,filled" fillcolor="#f6f8fa" fontname="Helvetica" fontsize=10];
+  edge [fontname="Helvetica" fontsize=9];
+
+  subgraph "cluster_p_62155f15e291ba3a" {
+    label="fixtures.local/fx/inputs @ main — .gitlab-ci.yml";
+    style="rounded,filled"; fillcolor="#ffffff"; color="#8250df"; fontsize=11;
+    subgraph "cluster_p_62155f15e291ba3a_s1" {
+      label="test"; rank=same; style=dashed; color="#d0d7de"; fontsize=10;
+      "p-62155f15e291ba3a/check" [label="check" tooltip="stage: test"];
+    }
+    subgraph "cluster_p_62155f15e291ba3a_s2" {
+      label="deploy"; rank=same; style=dashed; color="#d0d7de"; fontsize=10;
+      "p-62155f15e291ba3a/child-default" [label="child-default" color="#8250df" penwidth=2 tooltip="stage: deploy"];
+      "p-62155f15e291ba3a/child-prod" [label="child-prod" color="#8250df" penwidth=2 tooltip="stage: deploy"];
+    }
+    "p-62155f15e291ba3a/check" -> "p-62155f15e291ba3a/child-default" [style=invis weight=100];
+  }
+
+  subgraph "cluster_p_dc6e01a0b48c5dfe" {
+    label="fixtures.local/fx/inputs @ main — trigger:include via child-default";
+    style="rounded,filled"; fillcolor="#ffffff"; color="#8250df"; fontsize=11;
+    subgraph "cluster_p_dc6e01a0b48c5dfe_s2" {
+      label="test"; rank=same; style=dashed; color="#d0d7de"; fontsize=10;
+      "p-dc6e01a0b48c5dfe/deploy-staging" [label="deploy-staging" fillcolor="#ffd8b5" peripheries=2 tooltip="stage: test"];
+    }
+  }
+
+  subgraph "cluster_p_acb620b3f2eb2058" {
+    label="fixtures.local/fx/inputs @ main — trigger:include via child-prod";
+    style="rounded,filled"; fillcolor="#ffffff"; color="#8250df"; fontsize=11;
+    subgraph "cluster_p_acb620b3f2eb2058_s2" {
+      label="test"; rank=same; style=dashed; color="#d0d7de"; fontsize=10;
+      "p-acb620b3f2eb2058/deploy-production" [label="deploy-production" fillcolor="#ffd8b5" peripheries=2 tooltip="stage: test"];
+    }
+  }
+
+  "p-62155f15e291ba3a/child-default" -> "p-dc6e01a0b48c5dfe/deploy-staging" [style=bold color="#8250df" lhead="cluster_p_dc6e01a0b48c5dfe" label="trigger"];
+  "p-62155f15e291ba3a/child-prod" -> "p-acb620b3f2eb2058/deploy-production" [style=bold color="#8250df" lhead="cluster_p_acb620b3f2eb2058" label="trigger"];
+}

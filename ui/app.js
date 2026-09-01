@@ -503,7 +503,8 @@ function buildScene() {
         const extras =
           (it.count > 1 ? textW("×" + it.count, F.badge) + 6 : 0) +
           (it.job.trigger ? 13 : 0) +
-          (it.job.when === "manual" ? 13 : 0);
+          (it.job.when === "manual" ? 13 : 0) +
+          (allowFailureText(it.job) && it.job.when !== "manual" ? 13 : 0);
         pillW = Math.max(pillW, Math.min(240, textW(name, F.pill) + 18 + extras));
       }
       const nCols = Math.ceil(items.length / SUBCOL_WRAP);
@@ -518,7 +519,10 @@ function buildScene() {
         const cy = HEAD_H + STAGE_TITLE_H + (i % perCol) * (PILL_H + PILL_GAP);
         const name = it.job.base_name || it.job.name;
         const badge = it.count > 1 ? "×" + it.count : "";
-        const icons = (it.job.trigger ? "▶" : "") + (it.job.when === "manual" ? "✋" : "");
+        const icons =
+          (it.job.trigger ? "▶" : "") +
+          (it.job.when === "manual" ? "✋" : "") +
+          (allowFailureText(it.job) && it.job.when !== "manual" ? "⚠" : "");
         const extras = (badge ? textW(badge, F.badge) + 6 : 0) + (icons ? icons.length * 13 : 0);
         if (it.job.trigger) lastBridgeStage = Math.max(lastBridgeStage, stageIdx);
         pills.push({
@@ -3554,6 +3558,14 @@ function selectJob(id) {
   panel.classList.remove("hidden");
 }
 
+/** "allowed to fail…" for a job whose allow_failure is not plain false. */
+function allowFailureText(job) {
+  const af = job.allow_failure;
+  if (!af) return null;
+  if (Array.isArray(af.exit_codes)) return "allowed to fail on exit codes " + af.exit_codes.join(", ");
+  return af.bool ? "allowed to fail" : null;
+}
+
 function renderPanel(id) {
   let job = jobById(id);
   const p = pipeOfJob.get(id);
@@ -3571,6 +3583,7 @@ function renderPanel(id) {
   panel.appendChild(h("h2", "", shownName));
   panel.appendChild(h("div", "sub",
     p.project.path + " · stage " + job.stage + " · when: " + job.when +
+    (allowFailureText(job) ? " · " + allowFailureText(job) : "") +
     (count > 1 ? " · " + count + " parallel expansions" : "")));
 
   if (ev) {
@@ -3887,11 +3900,62 @@ function renderPanel(id) {
     const ul = h("ul", "prov-list");
     for (const n of job.needs) {
       const li = h("li");
-      li.append(n.job + (n.optional ? " (optional)" : ""));
-      if (n.project) li.append(" ← artifacts from " + n.project);
+      if (n.kind && n.kind !== "normal") {
+        li.append(n.job + (n.optional ? " (optional)" : ""));
+        if (n.project) li.append(" ← artifacts from " + n.project);
+        ul.appendChild(li);
+        continue;
+      }
+      const target = jobById(p.id + "/" + n.job);
+      if (target) {
+        const b = h("button", "loc-link", n.job);
+        b.title = "select this job";
+        b.addEventListener("click", (ev2) => {
+          ev2.stopPropagation();
+          const pi = scene.pillByJob.get(payloadJob(target).id);
+          if (pi !== undefined) flyTo(pi);
+          if (selectedJob !== target.id) selectJob(target.id);
+        });
+        li.appendChild(b);
+        if (n.optional) li.append(" (optional)");
+        // A need that rules leave out of the pipeline is fatal unless optional:
+        // https://docs.gitlab.com/ci/yaml/#needsoptional
+        const tev = lastEval && lastEval.jobEval.get(target.id);
+        if (tev && tev.outcome === "skipped") {
+          li.appendChild(h("span", n.optional ? "note" : "warn",
+            n.optional
+              ? "not in this pipeline under the current simulation; ignored (optional)"
+              : "\u26a0 not in this pipeline under the current simulation \u2014 GitLab rejects the pipeline (undefined need) unless the need is optional: true"));
+        }
+      } else {
+        li.append(n.job + (n.optional ? " (optional)" : ""));
+        li.appendChild(h("span", n.optional ? "note" : "warn",
+          n.optional
+            ? "no such job in this pipeline; ignored (optional)"
+            : "\u26a0 no such job in this pipeline \u2014 GitLab rejects the configuration"));
+      }
+      if (n.artifacts === false) li.append(" · no artifacts");
       ul.appendChild(li);
     }
     panel.appendChild(ul);
+  }
+
+  if (p.spec_inputs && p.spec_inputs.length) {
+    panel.appendChild(h("h3", "", "Pipeline inputs (spec:inputs)"));
+    const tbl = h("table", "kv");
+    const fmt = (v) => (typeof v === "string" ? v : JSON.stringify(v));
+    for (const inp of p.spec_inputs) {
+      const tr = h("tr");
+      tr.appendChild(h("td", "", inp.name + (inp.input_type ? " : " + inp.input_type : "")));
+      let text = inp.value === undefined || inp.value === null
+        ? "(no value and no default)"
+        : fmt(inp.value) + (inp.provided ? " (provided)" : " (default)");
+      if (inp.options && inp.options.length) text += " · options: " + inp.options.map(fmt).join(", ");
+      if (inp.description) text += " \u2014 " + inp.description;
+      tr.appendChild(h("td", "", text));
+      tbl.appendChild(tr);
+    }
+    panel.appendChild(tbl);
   }
 
   const vars = Object.entries(job.variables || {});

@@ -161,6 +161,10 @@ template endpoint only knows top-level templates.
 
 ## Smaller known gaps
 
+- A `needs` entry whose job the simulation leaves out of the pipeline (or
+  that does not exist) is flagged in the viewer's panel, per
+  <https://docs.gitlab.com/ci/yaml/#needsoptional>; the native scan emits
+  no diagnostic for it yet.
 - Legacy `only:`/`except:` `kubernetes: active` is always *unknown* (it
   depends on the project's cluster integration, which is not static).
 - Dynamic child pipelines remain opaque by design (their YAML does not exist

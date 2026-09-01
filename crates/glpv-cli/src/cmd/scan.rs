@@ -55,6 +55,10 @@ pub struct ScanArgs {
     /// repository-relative).
     #[arg(long = "changed-file", value_name = "PATH")]
     pub changed_files: Vec<String>,
+    /// `spec:inputs` value for the entry file, NAME=VALUE (repeatable; the
+    /// value is taken as a string).
+    #[arg(long = "input", value_name = "NAME=VALUE")]
+    pub inputs: Vec<String>,
     /// After the scan, bare-clone every project that was read through the
     /// API into `<first --projects root>/.glpv-clones/<host>/<path>.git`
     /// (blobless, with the files the scan read fetched) so later runs need
@@ -82,12 +86,20 @@ pub fn build_opts(args: &ScanArgs) -> anyhow::Result<(glpv_core::vars::Scenario,
         (None, false) => Some(DiffSpec::Files(args.changed_files.clone())),
         (None, true) => None,
     };
+    let mut root_inputs = indexmap::IndexMap::new();
+    for kv in &args.inputs {
+        let (k, v) = kv
+            .split_once('=')
+            .ok_or_else(|| anyhow::anyhow!("--input must be NAME=VALUE, got `{kv}`"))?;
+        root_inputs.insert(k.to_string(), v.to_string());
+    }
     let opts = ResolveOpts {
         embed_sources: !args.no_embed_sources,
         allow_remote: args.allow_remote,
         max_pipelines: args.max_pipelines,
         full_provenance: args.full_provenance,
         diff,
+        root_inputs,
         ..ResolveOpts::default()
     };
     Ok((scenario, opts))
