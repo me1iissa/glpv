@@ -23,6 +23,9 @@ enum Command {
     Resolve(cmd::resolve::ResolveArgs),
     /// Show the project index built from the clones folder(s).
     Index(cmd::index::IndexCmdArgs),
+    /// Compare the local resolution with the server's lint API (merged
+    /// configuration and the jobs that would run); exit 1 on any difference.
+    Check(cmd::check::CheckArgs),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -31,5 +34,6 @@ fn main() -> anyhow::Result<()> {
         Command::Scan(args) => cmd::scan::run(args),
         Command::Resolve(args) => cmd::resolve::run(args),
         Command::Index(args) => cmd::index::run(args),
+        Command::Check(args) => cmd::check::run(args),
     }
 }

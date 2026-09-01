@@ -93,6 +93,38 @@ ui-test:
     # the same parity suite against the evaluator built from source in `samples`
     - GLPV_WASM_B64=target/ui-test/eval-wasm.fresh.b64 node --test ui/test/parity.test.mjs
 
+# ---------- the oracle: local resolution vs the server's lint API ----------
+# Runs only when the project defines GLPV_CHECK_PROJECTS (space-separated
+# `group/project[@ref]` entries, a CI variable — never in this file) and
+# GLPV_API_TOKEN (masked; api + read_repository scopes). Each project is
+# cloned with the token and checked with `glpv check`.
+
+check:
+  extends: .rust
+  stage: test
+  rules:
+    - if: $GLPV_CHECK_PROJECTS && $GLPV_API_TOKEN
+  variables:
+    GIT_DEPTH: 0
+  script:
+    - cargo build -q --release -p glpv-cli
+    - mkdir -p checks
+    - |
+      status=0
+      for entry in $GLPV_CHECK_PROJECTS; do
+        project="${entry%@*}"; ref=""
+        case "$entry" in *@*) ref="${entry#*@}";; esac
+        dir="checks/$project"
+        if [ ! -d "$dir" ]; then
+          git clone -q --filter=blob:none "https://oauth2:${GLPV_API_TOKEN}@${CI_SERVER_HOST}/${project}.git" "$dir"
+        fi
+        if [ -n "$ref" ]; then git -C "$dir" checkout -q "$ref"; fi
+        echo "=== $entry"
+        GLPV_TOKEN="$GLPV_API_TOKEN" ./target/release/glpv check --file "$dir/.gitlab-ci.yml" --projects checks \
+          --api-transport curl --api-url "$CI_API_V4_URL" ${ref:+--ref "$ref"} || status=1
+      done
+      exit $status
+
 # ---------- corpus regression (scheduled / manual) ----------
 # Scans gitlab-org/gitlab and its downstream projects from fresh blobless
 # clones and asserts the shape the resolver is known to produce: any change in

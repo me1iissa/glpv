@@ -241,7 +241,11 @@ Progress against the six-milestone plan:
   web/api/trigger and downstream pipelines have no diff, so their `changes:`
   always match). The diff is embedded in the graph JSON for the viewer.
 - [ ] M4 (rest) — richer scenario sets.
-- [ ] M5 — GitLab API source + `glpv check` oracle diffing.
+- [x] M5 (oracle) — `glpv check` resolves a project locally and diffs the
+  merged configuration and the rules-filtered job list against the server's
+  lint API; CI runs it against reference projects, a fresh wasm build and the
+  gitlab-org corpus.
+- [ ] M5 (API source) — scan without clones through the GitLab REST API.
 - [ ] M6 — `serve --watch`, optional ELK layout, docs.
 
 ## Usage
@@ -277,6 +281,13 @@ $ glpv scan --projects target/glpv-demo --entry pipelines-demo/shop -o out/
 $ scripts/fetch-gitlab-corpus.sh corpus/
 $ glpv scan --projects corpus --entry gitlab-org/gitlab -o out/
 58 pipeline(s), 3167 job(s), 57 trigger edge(s)   # 4 projects, 281 YAML files
+# The oracle: compare the local resolution with the server (exit 1 on any
+# difference). `glab` must be logged in to the host, or use --api-transport
+# curl with GLPV_TOKEN.
+$ glpv check --file ../api/.gitlab-ci.yml --projects ~/projects
+glpv check acme/api @ main  (host gitlab.example.com)
+merged configuration: identical (16 top-level keys)
+jobs: server would create 11; local expects 11 to run (0 undecided) — identical
 ```
 
 ## Development

@@ -64,13 +64,24 @@ push (no changed-paths set, like a tag) has no scenario flag of its own.
   e.g. from a link) expands the group in place with the camera preserved.
   The toggle travels in the URL (`stk`).
 
-## Phase C — `glpv check`: the automated oracle
+## Phase C — `glpv check`: the automated oracle (done)
 
-- New command: for each project, resolve locally and diff (normalised) against
-  the server lint API's `merged_yaml`; exit non-zero on divergence.
-- Wire it into CI for a set of reference projects so evaluator/merge drift is
-  caught as a regression, not a surprise.
-- Also in CI: verify `ui/eval-wasm.b64` is fresh (rebuild and compare).
+- `glpv check --file|--entry [--ref]` resolves a project locally and asks
+  the server's lint API (`POST /projects/:id/ci/lint` with `dry_run` and
+  `include_jobs`) to do the same for the same entry file and ref. Two
+  comparisons: the merged configuration (both sides normalised — key order,
+  the expanded `include:`, the implicit `.pre`/`.post` stages) as a unified
+  diff, and the jobs a push pipeline on that ref would create against the
+  local rules evaluation (stage, effective `when`, `allow_failure`, script
+  lines; locally undecided jobs are reported, not counted). Exit 0 / 1 / 2 =
+  identical / differs / could not check. Transports: `glab api` (default) or
+  `curl` with `GLPV_TOKEN`; `--save-oracle` / `--oracle-json` replay a
+  response offline.
+- CI: a `check` job runs it against reference projects named in the CI
+  variable `GLPV_CHECK_PROJECTS` (with `GLPV_API_TOKEN`), so evaluator or
+  merge drift fails the pipeline; `samples`/`ui-test` also run the parity
+  suite against a wasm build made from source; a scheduled `corpus` job
+  rescans gitlab-org/gitlab and asserts the known counts.
 
 ## Phase D — API source (scan without clones)
 

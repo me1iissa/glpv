@@ -1,3 +1,4 @@
+pub mod check;
 pub mod index;
 pub mod resolve;
 pub mod scan;
