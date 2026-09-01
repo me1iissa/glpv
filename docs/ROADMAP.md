@@ -34,12 +34,15 @@ assumption. Replace that with a real diff:
 
 ## Phase B — viewer navigation and shareable state
 
-- **Job search**: a topbar search box with fuzzy matching over job and
-  pipeline names; enter jumps (flyTo + select), with a result dropdown for
-  ambiguous matches. This is the last everyday gap on very large maps.
-- **Shareable state**: encode simulation (source/ref/tag/vars/assumptions),
-  selection, edge mode, and camera into the URL hash; restore on load. A
-  scanned HTML plus a hash becomes a reproducible "look at this" link.
+- **Job search** — done: a topbar search box (`/` focuses it) with fuzzy
+  matching over job, pipeline and stage names; results ring their pills on
+  the board, Enter jumps to a job (and selects it) or fits a pipeline card.
+- **Shareable state** — done: the simulation (source/ref/tag/vars/
+  assumptions), selection, edge mode and camera are encoded in the URL hash
+  as base64url JSON (keys omitted at their defaults, unknown keys ignored, the
+  camera as a world-space centre so a link survives another window size) and
+  restored on load; "copy link" in the topbar. A scanned HTML plus a hash is
+  a reproducible "look at this" link.
 - **Stack collapse**: an optional toggle that collapses runs of near-identical
   sibling child pipelines (e.g. 37 per-gem children) into one expandable
   stacked card.

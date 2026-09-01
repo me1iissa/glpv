@@ -20,10 +20,10 @@ const CANVAS_NOT_IMPLEMENTED = /Not implemented: HTMLCanvasElement/;
 
 /**
  * @param {string} fragmentHtml the CLI's index.html (a body fragment)
- * @param {{wasm?: boolean, width?: number, height?: number}} opts
+ * @param {{wasm?: boolean, width?: number, height?: number, hash?: string}} opts
  * @returns {Promise<{window, glpv, errors: string[], close(): void}>}
  */
-export async function loadViewer(fragmentHtml, { wasm = true, width = 1400, height = 900 } = {}) {
+export async function loadViewer(fragmentHtml, { wasm = true, width = 1400, height = 900, hash = "" } = {}) {
   const errors = [];
   const virtualConsole = new VirtualConsole();
   virtualConsole.on("jsdomError", (e) => {
@@ -37,7 +37,7 @@ export async function loadViewer(fragmentHtml, { wasm = true, width = 1400, heig
   const dom = new JSDOM(html, {
     runScripts: "dangerously",
     pretendToBeVisual: true,
-    url: "http://glpv.test/",
+    url: "http://glpv.test/" + hash,
     virtualConsole,
     beforeParse(window) {
       window.addEventListener("error", (e) => {

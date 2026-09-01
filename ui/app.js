@@ -1247,6 +1247,16 @@ let hoverLabel = -1;
 let edgeMode = "focus"; // focus | all | triggers
 let selLineage = null;  // {pills:Set, edges:Set} for the selected job
 let hoverLit = null;    // Set of edge indices around the hovered pill
+let edgeModeSel = null; // the topbar <select>, set by buildTopbar
+
+function setEdgeMode(v) {
+  if (!["focus", "all", "triggers"].includes(v)) v = "focus";
+  edgeMode = v;
+  if (edgeModeSel && edgeModeSel.value !== v) edgeModeSel.value = v;
+  if (mode === "webgl2") uploadEdgeState();
+  draw();
+  scheduleHashWrite();
+}
 
 const EDGE_NORMAL = 0, EDGE_DIM = 1, EDGE_HIDDEN = 2, EDGE_LIT = 3;
 function edgeStateOf(e, idx) {
@@ -1294,6 +1304,11 @@ function pillStyle(pl) {
   }
   if (pl.dim) alpha = Math.min(alpha, 0.3);
   if (selLineage && !selLineage.pills.has(pl.idx)) alpha = Math.min(alpha, 0.35);
+  if (matchSet && matchSet.has(pl.idx)) {
+    stroke = P.accent;
+    strokeW = 2.2;
+    alpha = 1;
+  }
   if (selectedJob === pl.id) {
     stroke = P.accent;
     strokeW = 2.4;
@@ -2005,6 +2020,7 @@ function applyEval() {
   draw();
   updateCounts(res);
   if (selectedJob) renderPanel(selectedJob);
+  scheduleHashWrite();
 }
 
 /* ================= variable name suggestions ================= */
@@ -2031,6 +2047,363 @@ function scannedVarNames() {
   const custom = [...names].filter((n) => !n.startsWith("CI_")).sort();
   const predefined = [...names].filter((n) => n.startsWith("CI_")).sort();
   return custom.concat(predefined);
+}
+
+/* ================= search ================= */
+
+const searchIndex = []; // {kind, label, lc, sub, pillIdx?, cardIdx?, stageIdx?}
+let matchSet = null; // Set<pillIdx> ringed on the board while a query is typed
+let searchUI = null; // {input, list, hide, update}, set by buildSearchBox
+const KIND_ORDER = { job: 0, pipeline: 1, stage: 2 };
+const WORD_SEP = "-_/:. ";
+
+function buildSearchIndex() {
+  searchIndex.length = 0;
+  for (const pl of scene.pills) {
+    const p = pipeOfJob.get(pl.id);
+    const j = jobById(pl.id);
+    searchIndex.push({
+      kind: "job", label: pl.name, lc: pl.name.toLowerCase(),
+      sub: (p ? p.project.path : "") + (j && j.stage ? " · " + j.stage : ""),
+      pillIdx: pl.idx, cardIdx: pl.cardIdx,
+    });
+  }
+  scene.cards.forEach((c, cardIdx) => {
+    const p = c.p;
+    searchIndex.push({
+      kind: "pipeline", label: p.project.path, lc: p.project.path.toLowerCase(),
+      sub: (KIND_LABEL[p.kind] || p.kind) + " @ " + (p.git_ref || "worktree"),
+      cardIdx,
+    });
+  });
+  const seenStage = new Set();
+  for (const pl of scene.pills) {
+    const key = pl.cardIdx + "|" + pl.stageIdx;
+    if (seenStage.has(key)) continue;
+    seenStage.add(key);
+    const j = jobById(pl.id);
+    if (!j || !j.stage) continue;
+    searchIndex.push({
+      kind: "stage", label: j.stage, lc: j.stage.toLowerCase(),
+      sub: scene.cards[pl.cardIdx].p.project.path,
+      pillIdx: pl.idx, cardIdx: pl.cardIdx, stageIdx: pl.stageIdx,
+    });
+  }
+}
+
+/** Fuzzy score: prefix > word start > substring > subsequence; -1 = no match. */
+function fuzzyScore(q, lc) {
+  if (!q) return -1;
+  let score;
+  const i = lc.indexOf(q);
+  if (i === 0) score = 100;
+  else if (i > 0) score = WORD_SEP.includes(lc[i - 1]) ? 80 : 60;
+  else {
+    score = 10;
+    let pos = 0, prev = -2;
+    for (const ch of q) {
+      const k = lc.indexOf(ch, pos);
+      if (k < 0) return -1;
+      score += 1;
+      if (k === 0 || WORD_SEP.includes(lc[k - 1])) score += 3;
+      if (k === prev + 1) score += 2;
+      prev = k;
+      pos = k + 1;
+    }
+  }
+  if (lc === q) score += 20;
+  return score - 0.02 * (lc.length - q.length);
+}
+
+function runSearch(query, limit = 12) {
+  const q = String(query || "").trim().toLowerCase();
+  if (!q) return [];
+  const hits = [];
+  for (const entry of searchIndex) {
+    const score = fuzzyScore(q, entry.lc);
+    if (score >= 0) hits.push({ entry, score });
+  }
+  hits.sort(
+    (a, b) =>
+      b.score - a.score ||
+      a.entry.label.length - b.entry.label.length ||
+      KIND_ORDER[a.entry.kind] - KIND_ORDER[b.entry.kind]
+  );
+  return hits.slice(0, limit);
+}
+
+function stagePills(cardIdx, stageIdx) {
+  const set = new Set();
+  for (const pl of scene.pills) if (pl.cardIdx === cardIdx && pl.stageIdx === stageIdx) set.add(pl.idx);
+  return set;
+}
+
+/** Every pill a query matches (jobs, plus the pills of matching stages). */
+function matchesFor(query) {
+  const q = String(query || "").trim().toLowerCase();
+  if (q.length < 2) return null;
+  const set = new Set();
+  for (const entry of searchIndex) {
+    if (fuzzyScore(q, entry.lc) < 0) continue;
+    if (entry.kind === "job") set.add(entry.pillIdx);
+    else if (entry.kind === "stage") for (const i of stagePills(entry.cardIdx, entry.stageIdx)) set.add(i);
+  }
+  return set;
+}
+
+function setMatchSet(set) {
+  matchSet = set && set.size ? set : null;
+  if (mode === "webgl2") uploadRects();
+  draw();
+}
+
+function chooseResult(r) {
+  const e = r && r.entry ? r.entry : r;
+  if (!e) return;
+  if (e.kind === "job") {
+    flyTo(e.pillIdx);
+    const id = scene.pills[e.pillIdx].id;
+    if (selectedJob !== id) selectJob(id);
+  } else if (e.kind === "pipeline") {
+    fitCard(e.cardIdx);
+  } else {
+    flyTo(e.pillIdx);
+    setMatchSet(stagePills(e.cardIdx, e.stageIdx));
+  }
+  if (searchUI) searchUI.hide();
+}
+
+function clearSearch() {
+  if (!searchUI) return;
+  searchUI.input.value = "";
+  searchUI.update();
+}
+
+function buildSearchBox() {
+  const wrap = h("span", "search");
+  const input = h("input", "search-in");
+  input.type = "text";
+  input.placeholder = "search jobs / pipelines  ( / )";
+  input.setAttribute("autocomplete", "off");
+  input.setAttribute("spellcheck", "false");
+  input.setAttribute("role", "combobox");
+  input.setAttribute("aria-expanded", "false");
+  const list = h("div", "search-results");
+  list.hidden = true;
+  list.setAttribute("role", "listbox");
+  wrap.append(input, list);
+
+  let results = [], active = -1;
+  const render = () => {
+    list.innerHTML = "";
+    results.forEach((r, i) => {
+      const row = h("div", "search-row" + (i === active ? " active" : ""));
+      row.setAttribute("role", "option");
+      row.appendChild(h("span", "k", r.entry.kind));
+      row.appendChild(h("span", "l", r.entry.label));
+      row.appendChild(h("span", "s", r.entry.sub));
+      // pointerdown + preventDefault keeps the input focused
+      row.addEventListener("pointerdown", (ev) => { ev.preventDefault(); chooseResult(r); });
+      list.appendChild(row);
+    });
+    list.hidden = results.length === 0;
+    input.setAttribute("aria-expanded", String(!list.hidden));
+  };
+  const hide = () => {
+    list.hidden = true;
+    input.setAttribute("aria-expanded", "false");
+  };
+  const update = () => {
+    results = runSearch(input.value);
+    active = results.length ? 0 : -1;
+    render();
+    setMatchSet(matchesFor(input.value));
+  };
+  input.addEventListener("input", update);
+  input.addEventListener("focus", () => { if (input.value && results.length) render(); });
+  input.addEventListener("blur", hide); // the ring stays while text remains
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!results.length) return;
+      if (list.hidden) { render(); return; }
+      active = (active + (e.key === "ArrowDown" ? 1 : results.length - 1)) % results.length;
+      render();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (!results.length) return;
+      if (list.hidden) { render(); return; }
+      chooseResult(results[Math.max(0, active)]);
+    } else if (e.key === "Escape") {
+      if (input.value || !list.hidden) {
+        e.stopPropagation(); // a second Escape then clears the job selection
+        clearSearch();
+      } else input.blur();
+    } else if (e.key === "Tab") hide();
+  });
+  searchUI = { input, list, hide, update };
+  return wrap;
+}
+
+/* ================= url state =================
+ * The simulation, selection, edge mode and camera live in location.hash as
+ * base64url JSON, so a scanned index.html plus a hash is a reproducible
+ * "look at this" link. Keys are omitted at their defaults; unknown keys are
+ * ignored; the camera is a world-space centre so the link survives another
+ * window size. */
+
+let hashReady = false; // writes are ignored until the initial restore is done
+let hashTimer = null;
+let lastHash = "";
+
+function currentState() {
+  const st = { v: 1 };
+  if (sim.source !== DEFAULT_SOURCE) st.s = sim.source;
+  if (sim.ref) st.r = sim.ref;
+  if (sim.tag) st.t = 1;
+  const vars = sim.vars.filter((v) => v[0]);
+  if (vars.length) st.vars = vars.map((v) => [v[0], v[1]]);
+  if (sim.assumeChanges !== null) st.ac = sim.assumeChanges;
+  if (sim.assumeExists !== null) st.ae = sim.assumeExists;
+  if (selectedJob) st.sel = selectedJob;
+  if (edgeMode !== "focus") st.mode = edgeMode;
+  st.cam = [
+    Math.round(view.scale * 1000) / 1000,
+    Math.round((vw / 2 - view.tx) / view.scale),
+    Math.round((vh / 2 - view.ty) / view.scale),
+  ];
+  return st;
+}
+
+function encodeState(st = currentState()) {
+  try {
+    const bin = unescape(encodeURIComponent(JSON.stringify(st)));
+    return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  } catch (e) {
+    return "";
+  }
+}
+
+function decodeState(str) {
+  try {
+    let s = String(str || "").replace(/^#/, "");
+    if (!s) return null;
+    s = s.replace(/-/g, "+").replace(/_/g, "/");
+    while (s.length % 4) s += "=";
+    const st = JSON.parse(decodeURIComponent(escape(atob(s))));
+    return st && typeof st === "object" && !Array.isArray(st) ? st : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/** Apply a decoded state defensively, key by key. */
+function applyState(st) {
+  if (!st || typeof st !== "object") return false;
+  sim.source = typeof st.s === "string" && SOURCES.includes(st.s) ? st.s : DEFAULT_SOURCE;
+  sim.ref = typeof st.r === "string" ? st.r.slice(0, 200) : "";
+  sim.tag = st.t === 1 || st.t === true;
+  sim.vars = Array.isArray(st.vars)
+    ? st.vars
+        .filter((v) => Array.isArray(v) && typeof v[0] === "string" && v[0] && typeof v[1] === "string")
+        .slice(0, 64)
+        .map((v) => [v[0], v[1]])
+    : [];
+  sim.assumeChanges = st.ac === true || st.ac === false ? st.ac : null;
+  sim.assumeExists = st.ae === true || st.ae === false ? st.ae : null;
+  if (refreshSimBarFn) refreshSimBarFn();
+  setEdgeMode(st.mode === "all" || st.mode === "triggers" ? st.mode : "focus");
+  const sel = typeof st.sel === "string" && pipeOfJob.has(st.sel) ? st.sel : null;
+  if (sel && sel !== selectedJob) selectJob(sel); // selectJob toggles: never repeat the id
+  else if (!sel && selectedJob) selectJob(null);
+  else applyEval();
+  const cam = st.cam;
+  if (Array.isArray(cam) && cam.length === 3 && cam.every((n) => typeof n === "number" && Number.isFinite(n))) {
+    resize(); // the panel may have appeared or gone: vw/vh follow
+    view.scale = Math.min(Math.max(cam[0], 0.03), 6);
+    view.tx = vw / 2 - cam[1] * view.scale;
+    view.ty = vh / 2 - cam[2] * view.scale;
+    draw();
+  } else fitView();
+  return true;
+}
+
+function writeHash() {
+  if (hashTimer) {
+    clearTimeout(hashTimer);
+    hashTimer = null;
+  }
+  const enc = encodeState();
+  if (!enc) return;
+  const next = "#" + enc;
+  if (next === lastHash) return;
+  lastHash = next;
+  try {
+    history.replaceState(null, "", next);
+  } catch (e) {
+    // a sandboxed frame may refuse; "copy link" still uses lastHash
+  }
+}
+function scheduleHashWrite() {
+  if (!hashReady) return;
+  if (hashTimer) clearTimeout(hashTimer);
+  hashTimer = setTimeout(writeHash, 200);
+}
+function restoreFromHash() {
+  const st = decodeState(location.hash);
+  if (!st) return false;
+  applyState(st);
+  lastHash = location.hash;
+  return true;
+}
+addEventListener("hashchange", () => {
+  if (location.hash === lastHash) return;
+  const st = decodeState(location.hash);
+  if (!st) return;
+  hashReady = false;
+  try {
+    applyState(st);
+  } finally {
+    hashReady = true;
+  }
+  lastHash = location.hash;
+});
+
+function copyLink(btn) {
+  writeHash();
+  const frag = lastHash || "#" + encodeState();
+  let url = frag;
+  let fragmentOnly = true;
+  try {
+    if (location.protocol !== "about:" && location.protocol !== "blob:") {
+      url = location.href.split("#")[0] + frag;
+      fragmentOnly = false;
+    }
+  } catch (e) {
+    /* keep the fragment */
+  }
+  const done = (label) => {
+    const old = btn.textContent;
+    btn.textContent = label;
+    btn.classList.add("ok");
+    setTimeout(() => {
+      btn.textContent = old;
+      btn.classList.remove("ok");
+    }, 1200);
+  };
+  const fallback = () => {
+    try {
+      window.prompt("Copy this link:", url);
+    } catch (e) {
+      /* nothing else to offer */
+    }
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard
+      .writeText(url)
+      .then(() => done(fragmentOnly ? "state copied" : "copied"))
+      .catch(fallback);
+  } else fallback();
 }
 
 /* ================= top bars ================= */
@@ -2066,7 +2439,8 @@ function buildTopbar() {
   li("c", "cycle");
   topbar.appendChild(legend);
 
-  const modeSel = document.createElement("select");
+  edgeModeSel = document.createElement("select");
+  const modeSel = edgeModeSel;
   for (const [v, label] of [
     ["focus", "needs: hover / selection"],
     ["all", "needs: all"],
@@ -2080,20 +2454,21 @@ function buildTopbar() {
   modeSel.value = edgeMode;
   modeSel.title =
     "How needs edges are drawn. Hover a job to see its direct dependencies; click it to trace the full chain.";
-  modeSel.addEventListener("change", () => {
-    edgeMode = modeSel.value;
-    if (mode === "webgl2") uploadEdgeState();
-    draw();
-  });
+  modeSel.addEventListener("change", () => setEdgeMode(modeSel.value));
   topbar.appendChild(modeSel);
 
   topbar.appendChild(h("span", "spacer"));
+  topbar.appendChild(buildSearchBox());
   const zoom = h("span", "zoombar");
   for (const [label, act] of [["−", "out"], ["+", "in"], ["fit", "fit"]]) {
     const b = h("button", "", label);
     b.addEventListener("click", () => zoomAction(act));
     zoom.appendChild(b);
   }
+  const link = h("button", "", "copy link");
+  link.title = "copy a link that reproduces this view: simulation, selection, edge mode and camera";
+  link.addEventListener("click", () => copyLink(link));
+  zoom.appendChild(link);
   topbar.appendChild(zoom);
 }
 
@@ -2230,6 +2605,8 @@ function buildSimbar() {
   refreshSimBarFn = () => {
     renderVars();
     srcSel.value = sim.source;
+    refIn.value = sim.ref;
+    tagCb.checked = sim.tag;
     chSel.value = sim.assumeChanges === null ? "null" : String(sim.assumeChanges);
     exSel.value = sim.assumeExists === null ? "null" : String(sim.assumeExists);
   };
@@ -3412,6 +3789,7 @@ function fitView() {
   view.tx = Math.max(10, (vw - sw * view.scale) / 2);
   view.ty = 10;
   draw();
+  scheduleHashWrite();
 }
 function flyTo(pillIdx) {
   if (pillIdx === undefined || pillIdx < 0) return;
@@ -3420,6 +3798,18 @@ function flyTo(pillIdx) {
   view.tx = vw * 0.38 - (pl.x + pl.w / 2) * view.scale;
   view.ty = vh / 2 - (pl.y + pl.h / 2) * view.scale;
   draw();
+  scheduleHashWrite();
+}
+/** Fit one pipeline card into the viewport (search result for a pipeline). */
+function fitCard(cardIdx, pad = 40) {
+  const c = scene.cards[cardIdx];
+  if (!c) return;
+  const fit = Math.min(1.5, (vw - 2 * pad) / c.w, (vh - 2 * pad) / c.h);
+  view.scale = Math.min(Math.max(fit, 0.03), 6);
+  view.tx = vw / 2 - (c.x + c.w / 2) * view.scale;
+  view.ty = vh / 2 - (c.y + c.h / 2) * view.scale;
+  draw();
+  scheduleHashWrite();
 }
 function zoomAt(cx, cy, f) {
   const r = viewport.getBoundingClientRect();
@@ -3429,6 +3819,7 @@ function zoomAt(cx, cy, f) {
   view.ty = py - ((py - view.ty) * ns) / view.scale;
   view.scale = ns;
   draw();
+  scheduleHashWrite();
 }
 function zoomAction(act) {
   const r = viewport.getBoundingClientRect();
@@ -3492,6 +3883,7 @@ function endDrag(e) {
   const wasClick = !dragState.moved;
   dragState = null;
   viewport.classList.remove("dragging");
+  if (!wasClick) scheduleHashWrite();
   if (wasClick && e.type === "pointerup") {
     const w = toWorld(e.clientX, e.clientY);
     const idx = pickPill(w.x, w.y);
@@ -3508,8 +3900,17 @@ function endDrag(e) {
 viewport.addEventListener("pointerup", endDrag);
 viewport.addEventListener("pointercancel", endDrag);
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && selectedJob && !document.querySelector(".overlay"))
-    selectJob(null);
+  const t = e.target, tag = t && t.tagName;
+  const typing =
+    tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (t && t.isContentEditable);
+  const overlayOpen = !!document.querySelector(".overlay");
+  if (e.key === "/" && !typing && !overlayOpen && !e.ctrlKey && !e.metaKey && !e.altKey && searchUI) {
+    e.preventDefault();
+    searchUI.input.focus();
+    searchUI.input.select();
+    return;
+  }
+  if (e.key === "Escape" && selectedJob && !overlayOpen) selectJob(null);
 });
 
 /* ---- minimap: overview + click/drag navigation ---- */
@@ -3565,6 +3966,7 @@ function miniJump(e) {
   view.tx = vw / 2 - wx * view.scale;
   view.ty = vh / 2 - wy * view.scale;
   draw();
+  scheduleHashWrite();
 }
 let miniDrag = false;
 miniCanvas.addEventListener("pointerdown", (e) => {
@@ -3635,10 +4037,14 @@ app.appendChild(main);
 
 readPalette();
 buildScene();
+buildSearchIndex();
 initRenderer();
 resize();
-applyEval();
-fitView();
+if (!restoreFromHash()) {
+  applyEval();
+  fitView();
+}
+hashReady = true;
 watchTheme();
 const wasmReady = startWasm();
 startPulse();
@@ -3668,6 +4074,15 @@ Object.assign(window.__glpv, {
   renderPanel, gateChainFor, collectClauseInputs, solveOutcomes,
   findEnablingScenario, applyScenario, buildOutcomeExplorer,
   refreshSimBar: () => refreshSimBarFn && refreshSimBarFn(),
-  draw, resize,
+  draw, resize, setEdgeMode,
+  search: {
+    index: () => searchIndex, run: runSearch, score: fuzzyScore, matches: () => matchSet,
+    choose: chooseResult, clear: clearSearch, rebuild: buildSearchIndex, ui: () => searchUI,
+  },
+  state: {
+    current: currentState, encode: encodeState, decode: decodeState, apply: applyState,
+    write: writeHash, lastHash: () => lastHash,
+  },
+  camera: { fitCard, flyTo, fitView, zoomAt },
   errors: __glpvErrors,
 });

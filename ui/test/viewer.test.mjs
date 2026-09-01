@@ -233,3 +233,182 @@ for (const sample of SAMPLES) {
     });
   }
 }
+
+/* ---------------- search + shareable URL state ---------------- */
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+describe("search and URL state (fixtures, js)", () => {
+  let v, glpv, window, G, html;
+  const j = (x) => JSON.parse(JSON.stringify(x)); // window-realm values → plain
+  const key = (win, target, key, init = {}) =>
+    target.dispatchEvent(new win.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init }));
+  const type = (win, input, text) => {
+    input.value = text;
+    input.dispatchEvent(new win.Event("input", { bubbles: true }));
+  };
+  before(async () => {
+    html = readSample(FIXTURES).html;
+    v = await loadViewer(html, { wasm: false });
+    ({ glpv, window } = v);
+    G = glpv.G;
+  });
+  after(() => v && v.close());
+  const clean = () => assert.equal(v.errors.length, 0, v.errors.join("\n"));
+
+  test("index covers jobs, pipelines and stages; ranking is prefix > word start > anywhere > subsequence", () => {
+    const kinds = new Set(glpv.search.index().map((e) => e.kind));
+    assert.deepEqual([...kinds].sort(), ["job", "pipeline", "stage"]);
+    const res = glpv.search.run("deploy");
+    assert.ok(res.length >= 1 && res.length <= 12, String(res.length));
+    assert.ok(res.every((r) => r.entry.kind && r.entry.label && "score" in r));
+    const sc = glpv.search.score;
+    assert.ok(sc("build", "build") > sc("build", "build-image"), "exact beats prefix");
+    assert.ok(sc("build", "build-image") > sc("build", "docker-build"), "prefix beats word start");
+    assert.ok(sc("build", "docker-build") > sc("build", "rebuild"), "word start beats substring");
+    assert.ok(sc("build", "rebuild") > sc("bd", "build"), "substring beats subsequence");
+    assert.equal(sc("xyz", "build"), -1);
+    assert.equal(glpv.search.run("").length, 0);
+    clean();
+  });
+
+  test("typing rings the matches and opens the list; Escape clears both", () => {
+    const { input, list } = glpv.search.ui();
+    type(window, input, "deploy");
+    assert.ok(glpv.search.matches() && glpv.search.matches().size >= 1, "matches ringed");
+    assert.equal(list.hidden, false);
+    assert.ok(list.querySelectorAll(".search-row").length >= 1);
+    key(window, input, "Escape");
+    assert.equal(glpv.search.matches(), null);
+    assert.equal(input.value, "");
+    assert.equal(list.hidden, true);
+    clean();
+  });
+
+  test("Enter on a job result flies to it and selects it", () => {
+    const id = jobId(G, "fx/sim", "deploy-prod");
+    const { input } = glpv.search.ui();
+    type(window, input, "deploy-prod");
+    key(window, input, "Enter");
+    assert.equal(glpv.selectedJob, id);
+    assert.ok(glpv.view.scale >= 0.7);
+    assert.equal(glpv.search.ui().list.hidden, true);
+    clean();
+  });
+
+  test("a pipeline result fits its card in the viewport", () => {
+    const r = glpv.search.run("fx/legacy").find((x) => x.entry.kind === "pipeline");
+    assert.ok(r, "pipeline result for fx/legacy");
+    glpv.search.choose(r);
+    const c = glpv.scene.cards[r.entry.cardIdx];
+    const cx = (c.x + c.w / 2) * glpv.view.scale + glpv.view.tx;
+    assert.ok(Math.abs(cx - 700) < 1, "card centred horizontally (vw=1400): " + cx);
+    clean();
+  });
+
+  test("'/' focuses the search box unless the user is typing elsewhere", () => {
+    const { input } = glpv.search.ui();
+    window.document.body.focus();
+    key(window, window.document.body, "/");
+    assert.equal(window.document.activeElement, input);
+    input.blur();
+    const ref = glpv.simbar.querySelector("input.ref");
+    ref.focus();
+    const ev = new window.KeyboardEvent("keydown", { key: "/", bubbles: true, cancelable: true });
+    ref.dispatchEvent(ev);
+    assert.equal(ev.defaultPrevented, false, "slash typed into another input is not intercepted");
+    assert.equal(window.document.activeElement, ref);
+    ref.blur();
+    clean();
+  });
+
+  test("state omits defaults and round-trips through the hash encoding", () => {
+    glpv.search.clear();
+    glpv.state.apply({ v: 1 });
+    const st = glpv.state.current();
+    assert.deepEqual(j(Object.keys(st)), ["v", "cam"]);
+    assert.deepEqual(j(glpv.state.decode(glpv.state.encode(st))), j(st));
+    glpv.sim.vars = [["A", "1"], ["", "x"], ["B", "(unset)"]];
+    assert.deepEqual(j(glpv.state.current().vars), [["A", "1"], ["B", "(unset)"]]);
+    assert.equal(glpv.state.decode("#foo"), null);
+    assert.equal(glpv.state.decode(""), null);
+    assert.deepEqual(j(glpv.state.decode(glpv.state.encode({ v: 9, zzz: 1 }))), { v: 9, zzz: 1 });
+    clean();
+  });
+
+  test("apply is defensive about every key", () => {
+    const id = jobId(G, "fx/sim", "build");
+    glpv.state.apply({ v: 1, sel: "nope" });
+    assert.equal(glpv.selectedJob, null);
+    glpv.state.apply({ v: 1, cam: [NaN, 0, 0] });
+    assert.ok(Number.isFinite(glpv.view.scale) && Number.isFinite(glpv.view.tx) && Number.isFinite(glpv.view.ty));
+    glpv.state.apply({ v: 1, mode: "all" });
+    assert.equal(glpv.edgeMode, "all");
+    assert.equal(window.document.querySelector(".topbar select").value, "all");
+    glpv.state.apply({ v: 1, mode: "bogus" });
+    assert.equal(glpv.edgeMode, "focus");
+    glpv.state.apply({ v: 9, s: "web", r: "main", t: 1, ac: true, ae: "yes", vars: [["X", "1"], "junk", ["", "2"]], zzz: 1 });
+    assert.equal(glpv.sim.source, "web");
+    assert.equal(glpv.sim.ref, "main");
+    assert.equal(glpv.sim.tag, true);
+    assert.equal(glpv.sim.assumeChanges, true);
+    assert.equal(glpv.sim.assumeExists, null);
+    assert.deepEqual(j(glpv.sim.vars), [["X", "1"]]);
+    assert.equal(glpv.simbar.querySelector("select").value, "web");
+    assert.equal(glpv.simbar.querySelector("input.ref").value, "main");
+    assert.equal(glpv.simbar.querySelector('input[type="checkbox"]').checked, true);
+    assert.equal(glpv.simbar.querySelector('select[data-assume="changes"]').value, "true");
+    glpv.state.apply({ v: 1, s: "nonsense", sel: id, cam: [1.5, 100, 50] });
+    assert.equal(glpv.sim.source, "push");
+    assert.equal(glpv.selectedJob, id);
+    assert.equal(glpv.view.scale, 1.5);
+    assert.ok(Math.abs((700 - glpv.view.tx) / 1.5 - 100) < 1, "camera centre x restored");
+    glpv.state.apply({ v: 1 });
+    assert.equal(glpv.selectedJob, null);
+    clean();
+  });
+
+  test("changes write the hash (debounced); hashchange re-applies; a refusing replaceState is swallowed", async () => {
+    const id = jobId(G, "fx/sim", "build");
+    glpv.state.apply({ v: 1 });
+    glpv.selectJob(id);
+    await sleep(350);
+    assert.equal(glpv.state.decode(window.location.hash).sel, id);
+    assert.equal(glpv.state.lastHash(), window.location.hash);
+    window.location.hash = glpv.state.encode({ v: 1, s: "schedule" });
+    await sleep(50);
+    assert.equal(glpv.sim.source, "schedule");
+    assert.equal(glpv.selectedJob, null);
+    const orig = window.history.replaceState;
+    window.history.replaceState = () => { throw new Error("sandboxed"); };
+    try {
+      glpv.sim.ref = "hotfix";
+      glpv.applyEval();
+      glpv.state.write();
+      assert.equal(glpv.state.decode(glpv.state.lastHash()).r, "hotfix");
+    } finally {
+      window.history.replaceState = orig;
+    }
+    clean();
+  });
+
+  test("a link restores simulation, selection, edge mode and camera in a fresh window", async () => {
+    const id = jobId(G, "fx/sim", "deploy-prod");
+    const st = { v: 1, s: "merge_request_event", vars: [["DEPLOY_ENV", "production"]], sel: id, mode: "triggers", cam: [1.2, 300, 200] };
+    const v2 = await loadViewer(html, { wasm: false, hash: "#" + glpv.state.encode(st) });
+    try {
+      assert.equal(v2.glpv.sim.source, "merge_request_event");
+      assert.deepEqual(j(v2.glpv.sim.vars), [["DEPLOY_ENV", "production"]]);
+      assert.equal(v2.glpv.selectedJob, id);
+      assert.ok(!v2.glpv.panel.classList.contains("hidden"));
+      assert.equal(v2.glpv.edgeMode, "triggers");
+      assert.equal(v2.glpv.view.scale, 1.2);
+      assert.ok(Math.abs((700 - v2.glpv.view.tx) / 1.2 - 300) < 1);
+      assert.ok(Math.abs((450 - v2.glpv.view.ty) / 1.2 - 200) < 1);
+      assert.equal(v2.glpv.state.lastHash(), v2.window.location.hash);
+      assert.equal(v2.errors.length, 0, v2.errors.join("\n"));
+    } finally {
+      v2.close();
+    }
+  });
+});
