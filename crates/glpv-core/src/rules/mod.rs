@@ -406,6 +406,7 @@ pub fn evaluate_rules(
     if summary.rules.is_empty() {
         return JobEvaluation {
             scenario_id: scenario_id.to_string(),
+            variables: IndexMap::new(),
             outcome: outcome_of_when(job_when),
             trace: Vec::new(),
             blocked_by: None,
@@ -414,6 +415,7 @@ pub fn evaluate_rules(
 
     let mut trace = Vec::new();
     let mut decided: Option<Outcome> = None;
+    let mut matched_vars: IndexMap<String, String> = IndexMap::new();
     for (index, clause) in summary.rules.iter().enumerate() {
         if decided.is_some() {
             trace.push(RuleTrace {
@@ -473,7 +475,10 @@ pub fn evaluate_rules(
 
         let when = clause.when.unwrap_or(job_when);
         match result {
-            Tri::True => decided = Some(outcome_of_when(when)),
+            Tri::True => {
+                decided = Some(outcome_of_when(when));
+                matched_vars = clause.variables.clone();
+            }
             Tri::Unknown => decided = Some(Outcome::Unknown),
             Tri::False => {}
         }
@@ -493,6 +498,7 @@ pub fn evaluate_rules(
 
     JobEvaluation {
         scenario_id: scenario_id.to_string(),
+        variables: matched_vars,
         // No clause matched → the job is not added to the pipeline.
         outcome: decided.unwrap_or(Outcome::Skipped),
         trace,
@@ -544,6 +550,7 @@ fn evaluate_legacy(
     let Some(legacy) = legacy else {
         return JobEvaluation {
             scenario_id: scenario_id.to_string(),
+            variables: IndexMap::new(),
             outcome: Outcome::Unknown,
             trace: Vec::new(),
             blocked_by: None,
@@ -658,6 +665,7 @@ fn evaluate_legacy(
     };
     JobEvaluation {
         scenario_id: scenario_id.to_string(),
+        variables: IndexMap::new(),
         outcome,
         trace: vec![RuleTrace {
             index: 0,

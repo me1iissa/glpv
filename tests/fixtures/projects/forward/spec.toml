@@ -1,0 +1,71 @@
+# `trigger:forward` and `rules:variables`: which variables a child pipeline
+# inherits from its bridge. Exercised by the snapshot tests and by the
+# JS/wasm parity matrix.
+dir = "forward-project"
+remote = "git@fixtures.local:fx/forward.git"
+default_branch = "main"
+
+[[commits]]
+message = "fan out with different forward settings"
+
+[commits.files]
+"ci/child.yml" = '''
+from-root:
+  script: [echo root]
+  rules:
+    - if: $ROOT_VAR == "from-root"
+from-bridge:
+  script: [echo bridge]
+  rules:
+    - if: $BRIDGE_VAR == "from-bridge"
+from-rule:
+  script: [echo rule]
+  rules:
+    - if: $RULE_VAR == "from-rule"
+from-pipeline:
+  script: [echo pipeline]
+  rules:
+    - if: $PIPELINE_VAR == "from-pipeline"
+always:
+  script: [echo always]
+'''
+".gitlab-ci.yml" = '''
+variables:
+  ROOT_VAR: from-root
+
+stages: [fan]
+
+default-forward:
+  stage: fan
+  variables:
+    BRIDGE_VAR: from-bridge
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      variables:
+        RULE_VAR: from-rule
+    - when: never
+  trigger:
+    include: ci/child.yml
+
+pipeline-vars-too:
+  stage: fan
+  variables:
+    BRIDGE_VAR: from-bridge
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      variables:
+        RULE_VAR: from-rule
+  trigger:
+    include: ci/child.yml
+    forward:
+      pipeline_variables: true
+
+no-yaml-vars:
+  stage: fan
+  variables:
+    BRIDGE_VAR: from-bridge
+  trigger:
+    include: ci/child.yml
+    forward:
+      yaml_variables: false
+'''

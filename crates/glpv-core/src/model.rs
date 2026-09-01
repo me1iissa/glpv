@@ -360,6 +360,12 @@ impl Default for Forward {
     }
 }
 
+impl Forward {
+    pub fn is_default(&self) -> bool {
+        self.yaml_variables && !self.pipeline_variables
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Parallel {
@@ -375,6 +381,9 @@ pub struct TriggerEdge {
     pub cycle: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub strategy: Option<String>,
+    /// The bridge's `trigger:forward`: what the downstream pipeline inherits.
+    #[serde(default, skip_serializing_if = "Forward::is_default")]
+    pub forward: Forward,
     pub span: Span,
 }
 
@@ -516,6 +525,10 @@ pub enum ContributionKind {
 pub struct JobEvaluation {
     pub scenario_id: String,
     pub outcome: Outcome,
+    /// `rules:variables` of the matched clause: job variables under this
+    /// scenario, forwarded downstream with `trigger:forward:yaml_variables`.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub variables: IndexMap<String, String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub trace: Vec<RuleTrace>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -58,6 +58,8 @@ const sim = {
 
 const pipeOfJob = new Map();
 for (const p of G.pipelines) for (const j of p.jobs) pipeOfJob.set(j.id, p);
+// Graph lookups for the evaluator mirror (pipelines, trigger edges, bridges).
+const gctx = pipelineIndex(G);
 
 // Parallel/matrix expansions carry only a stub; the first expansion of each
 // base holds the shared payload (rules, YAML, provenance, variables).
@@ -160,6 +162,7 @@ function evaluateAll() {
       }
       if (res.trace && selectedJob && jobEval.has(selectedJob)) {
         jobEval.get(selectedJob).trace = adaptTrace(res.trace.trace);
+        jobEval.get(selectedJob).variables = res.trace.variables || {};
       }
     }
   }
@@ -2877,10 +2880,8 @@ function gateChainFor(job, p) {
 }
 
 function gateBaseTable(g) {
-  if (g.job) return jobVarTable(g.pipeline, g.job, sim);
-  const pv = pipelineVarTable(g.pipeline, sim);
-  for (const [k, v] of sim.vars) applySimVar(pv, k, v);
-  return pv;
+  if (g.job) return jobVarTable(g.pipeline, g.job, sim, gctx);
+  return pipelineVarTable(g.pipeline, sim, gctx);
 }
 
 function simpleReLiteral(reSrc) {
@@ -2956,14 +2957,14 @@ function evalGateWorld(g, baseTable, facts, assign, gi) {
       const v = assign.get("cl:" + gi + ":" + ci);
       return v === undefined ? null : v;
     },
-    changes: (q) => changesChecker(g.pipeline, sim, pipeById)(q),
+    changes: (q) => changesChecker(g.pipeline, sim, gctx)(q),
     exists: () => sim.assumeExists,
   };
   return evaluateRules(g.rules, vars, g.when, facts, atoms);
 }
 
 function solveOutcomes(gates, ctx) {
-  const facts = gates.map((g) => factsOf(g.pipeline, sim, pipeById));
+  const facts = gates.map((g) => factsOf(g.pipeline, sim, gctx));
   let nodes = 0;
   const treeSig = (t) =>
     t.leaf
@@ -3394,7 +3395,7 @@ function evalGateSim(g, table, facts, assign, atomAssign) {
     changes: (q) =>
       atomAssign.has("changes")
         ? assumedMatch(atomAssign.get("changes"))
-        : changesChecker(g.pipeline, sim, pipeById)(q),
+        : changesChecker(g.pipeline, sim, gctx)(q),
     exists: () =>
       atomAssign.has("exists") ? atomAssign.get("exists") : sim.assumeExists,
   };
@@ -3423,7 +3424,7 @@ function findEnablingScenario(gates) {
 
 function searchScenario(gates, cand) {
   const tables = gates.map(gateBaseTable);
-  const facts = gates.map((g) => factsOf(g.pipeline, sim, pipeById));
+  const facts = gates.map((g) => factsOf(g.pipeline, sim, gctx));
   let nodes = 0;
   const rec = (assign, atomAssign) => {
     if (nodes++ > 8000) return null;
@@ -3450,7 +3451,7 @@ function searchScenario(gates, cand) {
       }
       for (const key of ["changes", "exists"]) {
         // a changes clause is decided by the diff once a file list is in force
-        if (key === "changes" && effectiveFiles(g.pipeline, sim, pipeById)) continue;
+        if (key === "changes" && effectiveFiles(g.pipeline, sim, gctx)) continue;
         if (clause && clause[key] && !atomAssign.has(key)) {
           for (const v of [true, false]) {
             atomAssign.set(key, v);
@@ -3657,7 +3658,7 @@ function renderPanel(id) {
     panel.appendChild(h("h3", "", "Invocation simulation"));
     const gates = gateChainFor(job, p);
     const gTables = gates.map(gateBaseTable);
-    const gFacts = gates.map((g2) => factsOf(g2.pipeline, sim, pipeById));
+    const gFacts = gates.map((g2) => factsOf(g2.pipeline, sim, gctx));
     const emptyA = new Map();
     const steps = gates.map((g2, gi) => {
       const evx = evalGateSim(g2, gTables[gi], gFacts[gi], emptyA, emptyA);
@@ -3757,7 +3758,7 @@ function renderPanel(id) {
           const [c2, n2] = evalChanges(
             cl2.changes || [], cl2.compare_to ?? null, cl2.changes_regexp ?? null,
             gTables[st2.gi], gFacts[st2.gi].pushEvent, gFacts[st2.gi].source,
-            changesChecker(st2.g.pipeline, sim, pipeById)
+            changesChecker(st2.g.pipeline, sim, gctx)
           );
           const what =
             cl2.changes_regexp != null
@@ -3836,6 +3837,12 @@ function renderPanel(id) {
 
   if (ev && ev.trace && ev.trace.length) {
     panel.appendChild(h("h3", "", "Rule trace (current simulation)"));
+    if (ev.variables && Object.keys(ev.variables).length) {
+      panel.appendChild(h("div", "sub",
+        "the matched rule sets " +
+          Object.entries(ev.variables).map(([k, v]) => k + " = " + JSON.stringify(v)).join(", ") +
+          " (forwarded to triggered pipelines with the YAML variables)"));
+    }
     const ul = h("ul", "trace");
     for (const t of ev.trace) {
       const li = h("li");

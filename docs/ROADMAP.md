@@ -126,12 +126,8 @@ push (no changed-paths set, like a tag) has no scenario flag of its own.
 
 ## Smaller known gaps
 
-- Rule-level `variables:` set by a matching rule are not applied to the job's
-  evaluation context.
 - Legacy `only:`/`except:` with conditions beyond refs (`variables:`,
   `kubernetes`) evaluate to *unknown*.
-- `trigger:forward` (`pipeline_variables: false`) is not simulated per edge —
-  simulation variables apply globally.
 - Dynamic child pipelines remain opaque by design (their YAML does not exist
   until runtime); the card says exactly which job generates them.
 - Scenario finder sentinel: "any other value" assumes it does not match the

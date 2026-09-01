@@ -29,6 +29,39 @@ use glpv_core::vars::{VarState, VarTable};
 #[derive(Deserialize)]
 struct WGraph {
     pipelines: Vec<WPipeline>,
+    #[serde(default)]
+    trigger_edges: Vec<WTriggerEdge>,
+}
+
+/// A trigger edge with the bridge's `trigger:forward` (GitLab's defaults
+/// when the graph omits it: YAML variables yes, pipeline variables no).
+#[derive(Deserialize)]
+struct WTriggerEdge {
+    from_job: String,
+    to_pipeline: String,
+    #[serde(default)]
+    forward: WForward,
+}
+
+#[derive(Deserialize, Clone, Copy)]
+struct WForward {
+    #[serde(default = "yes")]
+    yaml_variables: bool,
+    #[serde(default)]
+    pipeline_variables: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Default for WForward {
+    fn default() -> Self {
+        WForward {
+            yaml_variables: true,
+            pipeline_variables: false,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -161,7 +194,7 @@ fn facts_of(p: &WPipeline, sim: &Sim) -> Facts {
     }
 }
 
-fn pipeline_vars(p: &WPipeline, facts: &Facts, sim: &Sim) -> VarTable {
+fn pipeline_vars(p: &WPipeline, facts: &Facts) -> VarTable {
     let mut t = VarTable::default();
     let host = &p.project.host;
     let path = &p.project.path;
@@ -208,7 +241,13 @@ fn pipeline_vars(p: &WPipeline, facts: &Facts, sim: &Sim) -> VarTable {
     for (k, v) in &p.variables {
         t.set_known(k, v);
     }
-    for (k, v) in &sim.vars {
+    t
+}
+
+/// Apply pipeline-level variables (the `(unset)` sentinel simulates an unset
+/// variable).
+fn apply_level(t: &mut VarTable, vars: &[(String, String)]) {
+    for (k, v) in vars {
         if k.is_empty() {
             continue;
         }
@@ -218,7 +257,144 @@ fn pipeline_vars(p: &WPipeline, facts: &Facts, sim: &Sim) -> VarTable {
             t.set_known(k, v);
         }
     }
+}
+
+/// Everything the evaluation of one graph under one simulation needs to look
+/// up: pipelines by id, the trigger edge into each downstream pipeline, the
+/// (payload) bridge job by id, and a memo of pipeline-level variables.
+struct Ctx<'a> {
+    sim: &'a Sim,
+    by_id: HashMap<&'a str, &'a WPipeline>,
+    edge_into: HashMap<&'a str, &'a WTriggerEdge>,
+    job_owner: HashMap<&'a str, (&'a WPipeline, &'a WJob)>,
+    level: std::cell::RefCell<HashMap<String, Vec<(String, String)>>>,
+}
+
+impl<'a> Ctx<'a> {
+    fn new(g: &'a WGraph, sim: &'a Sim) -> Self {
+        let by_id = g.pipelines.iter().map(|p| (p.id.as_str(), p)).collect();
+        let mut edge_into = HashMap::new();
+        for e in &g.trigger_edges {
+            edge_into.entry(e.to_pipeline.as_str()).or_insert(e);
+        }
+        let mut job_owner = HashMap::new();
+        for p in &g.pipelines {
+            let mut first_of_base: HashMap<&str, &WJob> = HashMap::new();
+            for j in &p.jobs {
+                let payload = *first_of_base.entry(base_of(j)).or_insert(j);
+                job_owner.insert(j.id.as_str(), (p, payload));
+            }
+        }
+        Ctx {
+            sim,
+            by_id,
+            edge_into,
+            job_owner,
+            level: Default::default(),
+        }
+    }
+}
+
+/// The pipeline-level variables of `p` (GitLab's "pipeline variables"): the
+/// simulation's for a root or detached pipeline; for a downstream pipeline
+/// what its bridge forwards — with `yaml_variables` the parent's top-level
+/// and the bridge's own `variables:` plus the bridge's matched
+/// `rules:variables`, with `pipeline_variables` the parent's pipeline-level
+/// variables. Later entries win.
+fn pipeline_level_vars(cx: &Ctx<'_>, p: &WPipeline, depth: u32) -> Vec<(String, String)> {
+    if let Some(v) = cx.level.borrow().get(&p.id) {
+        return v.clone();
+    }
+    let out: Vec<(String, String)> = if p.kind == "root" || p.kind == "detached" {
+        cx.sim
+            .vars
+            .iter()
+            .filter(|(k, _)| !k.is_empty())
+            .cloned()
+            .collect()
+    } else {
+        let mut acc: IndexMap<String, String> = IndexMap::new();
+        if depth < 64
+            && let Some(edge) = cx.edge_into.get(p.id.as_str())
+            && let Some((parent, bridge)) = cx.job_owner.get(edge.from_job.as_str())
+        {
+            if edge.forward.yaml_variables {
+                for (k, v) in &parent.variables {
+                    acc.insert(k.clone(), v.clone());
+                }
+                for (k, v) in &bridge.variables {
+                    acc.insert(k.clone(), v.clone());
+                }
+                let table = job_table(cx, parent, bridge, depth + 1);
+                let ev = eval_job(cx, parent, &bridge.rules, bridge.when, &table);
+                for (k, v) in &ev.variables {
+                    acc.insert(k.clone(), v.clone());
+                }
+            }
+            if edge.forward.pipeline_variables {
+                for (k, v) in pipeline_level_vars(cx, parent, depth + 1) {
+                    acc.insert(k, v);
+                }
+            }
+        }
+        acc.into_iter().collect()
+    };
+    cx.level.borrow_mut().insert(p.id.clone(), out.clone());
+    out
+}
+
+/// The variable table a job's rules see: predefined + pipeline YAML + job
+/// YAML, with the pipeline-level variables applied last (they override).
+fn job_table(cx: &Ctx<'_>, p: &WPipeline, job: &WJob, depth: u32) -> VarTable {
+    let facts = facts_of(p, cx.sim);
+    let mut t = pipeline_vars(p, &facts);
+    for (k, v) in &job.variables {
+        t.set_known(k, v);
+    }
+    apply_level(&mut t, &pipeline_level_vars(cx, p, depth));
     t
+}
+
+/// Evaluate a rules chain in the context of pipeline `p`.
+fn eval_job(
+    cx: &Ctx<'_>,
+    p: &WPipeline,
+    rules: &RulesSummary,
+    when: When,
+    vars: &VarTable,
+) -> JobEvaluation {
+    let sim = cx.sim;
+    let facts = facts_of(p, sim);
+    let files = effective_files(p, &cx.by_id, sim);
+    let push_event = push_event_of(p, &cx.by_id, sim);
+    // A `compare_to` clause reads the pipeline's own per-ref list; a plain
+    // one the effective push-event list; without either, the simulation-wide
+    // assumption (or undecided).
+    let changes = move |q: &ChangesQuery<'_>| -> Option<ChangesMatch> {
+        let list: Option<&[String]> = match q.compare_to {
+            Some(r) => p
+                .diff
+                .as_ref()
+                .and_then(|d| d.compare_to.get(r))
+                .map(|v| v.as_slice()),
+            None => files,
+        };
+        match list {
+            Some(l) => Some(match_changes(q.patterns, l)),
+            None => sim.assume_changes.map(ChangesMatch::Assumed),
+        }
+    };
+    let assume_exists = move |_: &[String]| sim.assume_exists;
+    let ctx = EvalContext {
+        vars,
+        exists: Some(&assume_exists),
+        changes: Some(&changes),
+        source: &facts.source,
+        ref_name: &facts.ref_name,
+        is_tag: facts.is_tag,
+        push_event,
+    };
+    evaluate_rules(rules, &ctx, "sim", when)
 }
 
 fn is_child(p: &WPipeline) -> bool {
@@ -280,7 +456,7 @@ fn eval_all(g: &WGraph, sim: &Sim) -> Out {
         pipelines: HashMap::with_capacity(g.pipelines.len()),
         trace: None,
     };
-    let by_id: HashMap<&str, &WPipeline> = g.pipelines.iter().map(|p| (p.id.as_str(), p)).collect();
+    let cx = Ctx::new(g, sim);
     // Traces are computed for the base of the requested job (siblings share).
     let trace_base: Option<(&str, String)> = sim.trace_job.as_deref().and_then(|id| {
         g.pipelines.iter().find_map(|p| {
@@ -293,39 +469,13 @@ fn eval_all(g: &WGraph, sim: &Sim) -> Out {
 
     for p in &g.pipelines {
         let facts = facts_of(p, sim);
-        let pvars = pipeline_vars(p, &facts, sim);
-        let files = effective_files(p, &by_id, sim);
-        let push_event = push_event_of(p, &by_id, sim);
-        // A `compare_to` clause reads the pipeline's own per-ref list; a
-        // plain one the effective push-event list; without either, the
-        // simulation-wide assumption (or undecided).
-        let changes = move |q: &ChangesQuery<'_>| -> Option<ChangesMatch> {
-            let list: Option<&[String]> = match q.compare_to {
-                Some(r) => p
-                    .diff
-                    .as_ref()
-                    .and_then(|d| d.compare_to.get(r))
-                    .map(|v| v.as_slice()),
-                None => files,
-            };
-            match list {
-                Some(l) => Some(match_changes(q.patterns, l)),
-                None => sim.assume_changes.map(ChangesMatch::Assumed),
-            }
-        };
-        let assume_exists = move |_: &[String]| sim.assume_exists;
-        let wf_outcome = p.workflow_rules.as_ref().map(|wf| {
-            let ctx = EvalContext {
-                vars: &pvars,
-                exists: Some(&assume_exists),
-                changes: Some(&changes),
-                source: &facts.source,
-                ref_name: &facts.ref_name,
-                is_tag: facts.is_tag,
-                push_event,
-            };
-            evaluate_rules(wf, &ctx, "sim", When::OnSuccess).outcome
-        });
+        let level = pipeline_level_vars(&cx, p, 0);
+        let mut pvars = pipeline_vars(p, &facts);
+        apply_level(&mut pvars, &level);
+        let wf_outcome = p
+            .workflow_rules
+            .as_ref()
+            .map(|wf| eval_job(&cx, p, wf, When::OnSuccess, &pvars).outcome);
 
         let mut by_base: HashMap<String, (Outcome, Option<String>)> = HashMap::new();
         for j in &p.jobs {
@@ -333,30 +483,8 @@ fn eval_all(g: &WGraph, sim: &Sim) -> Out {
             if by_base.contains_key(base) {
                 continue;
             }
-            let mut vars = pvars.clone();
-            for (k, v) in &j.variables {
-                vars.set_known(k, v);
-            }
-            for (k, v) in &sim.vars {
-                if k.is_empty() {
-                    continue;
-                }
-                if v == "(unset)" {
-                    vars.set(k, VarState::Unset);
-                } else {
-                    vars.set_known(k, v);
-                }
-            }
-            let ctx = EvalContext {
-                vars: &vars,
-                exists: Some(&assume_exists),
-                changes: Some(&changes),
-                source: &facts.source,
-                ref_name: &facts.ref_name,
-                is_tag: facts.is_tag,
-                push_event,
-            };
-            let mut eval = evaluate_rules(&j.rules, &ctx, "sim", j.when);
+            let vars = job_table(&cx, p, j, 0);
+            let mut eval = eval_job(&cx, p, &j.rules, j.when, &vars);
             match wf_outcome {
                 Some(Outcome::Skipped) => {
                     eval.outcome = Outcome::Blocked;
@@ -606,5 +734,69 @@ mod tests {
         assert_eq!(out.pipelines["p-1"]["build"].0, Outcome::Runs);
         assert_eq!(out.pipelines["p-1"]["docs"].0, Outcome::Skipped);
         assert_eq!(out.pipelines["p-2"]["child-build"].0, Outcome::Runs);
+    }
+
+    // trigger:forward: YAML + rules:variables travel by default, pipeline
+    // (simulation) variables only when asked.
+    #[test]
+    fn forwarding_follows_trigger_forward() {
+        let span = serde_json::json!({"file": 0, "start": [1, 1], "end": [1, 1]});
+        let rules_main_sets_rv = serde_json::json!({"mode": "conditional", "rules": [
+        {"if": "$CI_COMMIT_BRANCH == \"main\"", "variables": {"RV": "rv"}, "span": span}]});
+        let child_jobs = serde_json::json!([
+            {"id": "c/from-root", "name": "from-root", "when": "on_success",
+             "rules": {"mode": "conditional", "rules": [{"if": "$ROOT == \"r\"", "span": span}]}},
+            {"id": "c/from-bridge", "name": "from-bridge", "when": "on_success",
+             "rules": {"mode": "conditional", "rules": [{"if": "$B == \"b\"", "span": span}]}},
+            {"id": "c/from-rule", "name": "from-rule", "when": "on_success",
+             "rules": {"mode": "conditional", "rules": [{"if": "$RV == \"rv\"", "span": span}]}},
+            {"id": "c/from-sim", "name": "from-sim", "when": "on_success",
+             "rules": {"mode": "conditional", "rules": [{"if": "$SIM == \"1\"", "span": span}]}}
+        ]);
+        let graph = |pipeline_variables: bool| {
+            serde_json::json!({
+                "pipelines": [
+                    {"id": "p-1", "kind": "root", "project": {"host": "h", "path": "g/p"},
+                     "git_ref": "main", "variables": {"ROOT": "r"},
+                     "jobs": [{"id": "p-1/t", "name": "t", "when": "on_success",
+                               "variables": {"B": "b"}, "rules": rules_main_sets_rv}]},
+                    {"id": "c", "kind": "child", "parent": ["p-1", "t"],
+                     "project": {"host": "h", "path": "g/p"}, "git_ref": "main", "jobs": child_jobs}
+                ],
+                "trigger_edges": [{"from_job": "p-1/t", "to_pipeline": "c",
+                    "forward": {"yaml_variables": true, "pipeline_variables": pipeline_variables}}]
+            })
+        };
+        let sim = Sim {
+            source: "push".into(),
+            git_ref: String::new(),
+            tag: false,
+            vars: vec![("SIM".into(), "1".into())],
+            trace_job: None,
+            assume_changes: None,
+            assume_exists: None,
+            changed_files: None,
+        };
+        let outcomes = |pv: bool| {
+            let g: WGraph = serde_json::from_value(graph(pv)).unwrap();
+            let out = eval_all(&g, &sim);
+            let c = &out.pipelines["c"];
+            ["from-root", "from-bridge", "from-rule", "from-sim"].map(|n| c[n].0)
+        };
+        assert_eq!(
+            outcomes(false),
+            [
+                Outcome::Runs,
+                Outcome::Runs,
+                Outcome::Runs,
+                Outcome::Unknown
+            ],
+            "YAML, bridge and rule variables forwarded; simulation variables not (unknown, not unset)"
+        );
+        assert_eq!(
+            outcomes(true),
+            [Outcome::Runs, Outcome::Runs, Outcome::Runs, Outcome::Runs],
+            "pipeline_variables: true forwards the simulation variables too"
+        );
     }
 }

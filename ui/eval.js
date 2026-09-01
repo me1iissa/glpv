@@ -652,10 +652,11 @@ function clauseText(c) {
 function evaluateRules(summary, vars, jobWhen, facts, atoms) {
   if (summary.mode === "legacy") return evaluateLegacy(summary, jobWhen, facts);
   if (!summary.rules || !summary.rules.length) {
-    return { outcome: outcomeOfWhen(jobWhen), trace: [] };
+    return { outcome: outcomeOfWhen(jobWhen), trace: [], variables: {} };
   }
   const trace = [];
   let decided = null;
+  let matchedVars = {};
   for (let index = 0; index < summary.rules.length; index++) {
     const clause = summary.rules[index];
     if (decided !== null) {
@@ -671,6 +672,7 @@ function evaluateRules(summary, vars, jobWhen, facts, atoms) {
     }
     let result = "true", varsUsed = [], note = null;
     const clauseOverride = atoms && atoms.clause ? atoms.clause(clause, index) : null;
+    if (clauseOverride === true) matchedVars = clause.variables || {};
     if (clauseOverride === true || clauseOverride === false) {
       result = clauseOverride ? "true" : "false";
     } else {
@@ -699,8 +701,10 @@ function evaluateRules(summary, vars, jobWhen, facts, atoms) {
       }
     }
     const when = clause.when || jobWhen;
-    if (result === "true") decided = outcomeOfWhen(when);
-    else if (result === "unknown") decided = "unknown";
+    if (result === "true") {
+      decided = outcomeOfWhen(when);
+      matchedVars = clause.variables || {};
+    } else if (result === "unknown") decided = "unknown";
     trace.push({
       index,
       result: result === "true" ? "matched" : result === "false" ? "no_match" : "unknown",
@@ -710,13 +714,13 @@ function evaluateRules(summary, vars, jobWhen, facts, atoms) {
       note,
     });
   }
-  return { outcome: decided === null ? "skipped" : decided, trace };
+  return { outcome: decided === null ? "skipped" : decided, trace, variables: matchedVars };
 }
 
 /** Legacy `only`/`except`, refs lists only; anything richer is unknown. */
 function evaluateLegacy(summary, jobWhen, facts) {
   const legacy = summary.rules && summary.rules[0] && summary.rules[0].legacy;
-  if (!legacy) return { outcome: "unknown", trace: [] };
+  if (!legacy) return { outcome: "unknown", trace: [], variables: {} };
 
   const branchy = ["push", "web", "pipeline", "parent_pipeline", "trigger", "api", "schedule"];
   const matchesRef = (p) => {
@@ -780,6 +784,7 @@ function evaluateLegacy(summary, jobWhen, facts) {
       varsUsed: [],
       note,
     }],
+    variables: {},
   };
 }
 
@@ -813,38 +818,99 @@ function isTagOf(p, sim) {
 function isChild(p) {
   return p.kind === "child" || p.kind === "dynamic_child";
 }
-/** byId: Map pipeline id → pipeline (pipelineIndex(G)); null when unavailable. */
-function parentOf(p, byId) {
+/** ctx: pipelineIndex(G) — {byId, edgeInto, jobOwner}; a bare Map of pipelines is accepted. */
+function byIdOf(ctx) {
+  return ctx && ctx.byId ? ctx.byId : ctx;
+}
+function parentOf(p, ctx) {
+  const byId = byIdOf(ctx);
   return p.parent && byId ? byId.get(p.parent[0]) || null : null;
 }
+/**
+ * Everything the evaluation of a graph needs to look up: pipelines by id,
+ * the trigger edge into each downstream pipeline (with the bridge's
+ * trigger:forward), and the (payload) bridge job by job id.
+ */
 function pipelineIndex(G) {
-  return new Map(G.pipelines.map((p) => [p.id, p]));
+  const byId = new Map(G.pipelines.map((p) => [p.id, p]));
+  const edgeInto = new Map();
+  for (const e of G.trigger_edges || []) if (!edgeInto.has(e.to_pipeline)) edgeInto.set(e.to_pipeline, e);
+  const jobOwner = new Map();
+  for (const p of G.pipelines) {
+    const firstOfBase = new Map();
+    for (const j of p.jobs) {
+      const base = j.base_name || j.name;
+      if (!firstOfBase.has(base)) firstOfBase.set(base, j);
+      jobOwner.set(j.id, [p, firstOfBase.get(base)]);
+    }
+  }
+  return { byId, edgeInto, jobOwner };
+}
+const FORWARD_DEFAULTS = { yaml_variables: true, pipeline_variables: false };
+
+/**
+ * The pipeline-level variables of p (GitLab's "pipeline variables"): the
+ * simulation's for a root or detached pipeline; for a downstream pipeline
+ * what its bridge forwards — with yaml_variables the parent's top-level and
+ * the bridge's own variables plus the bridge's matched rules:variables, with
+ * pipeline_variables the parent's pipeline-level variables. Later entries
+ * win. `memo` (a Map) caches per pipeline within one evaluation.
+ */
+function pipelineLevelVars(p, sim, ctx, memo, depth = 0) {
+  if (memo && memo.has(p.id)) return memo.get(p.id);
+  let out;
+  if (simulated(p)) out = sim.vars.filter((v) => v[0]);
+  else {
+    const acc = new Map();
+    const edge = ctx && ctx.edgeInto ? ctx.edgeInto.get(p.id) : null;
+    const owner = edge && ctx.jobOwner ? ctx.jobOwner.get(edge.from_job) : null;
+    const fwd = (edge && edge.forward) || FORWARD_DEFAULTS;
+    if (owner && depth < 64) {
+      const [parent, bridge] = owner;
+      if (fwd.yaml_variables !== false) {
+        for (const [k, v] of Object.entries(parent.variables || {})) acc.set(k, String(v));
+        for (const [k, v] of Object.entries(bridge.variables || {})) acc.set(k, String(v));
+        const table = jobVarTable(parent, bridge, sim, ctx, memo, depth + 1);
+        const ev = evaluateRules(bridge.rules, table, bridge.when, factsOf(parent, sim, ctx), simAtoms(sim, parent, ctx));
+        for (const [k, v] of Object.entries(ev.variables || {})) acc.set(k, String(v));
+      }
+      if (fwd.pipeline_variables) {
+        for (const [k, v] of pipelineLevelVars(parent, sim, ctx, memo, depth + 1)) acc.set(k, v);
+      }
+    }
+    out = [...acc];
+  }
+  if (memo) memo.set(p.id, out);
+  return out;
+}
+function applyLevel(t, vars) {
+  for (const [k, v] of vars) applySimVar(t, k, v);
 }
 /** A child has a push event exactly when its parent has; downstream never. */
-function pushEventOf(p, sim, byId) {
+function pushEventOf(p, sim, ctx) {
   let cur = p;
   for (let i = 0; i < 64 && cur; i++) {
     if (simulated(cur)) return hasPushEvent(sim.source, sim.tag);
     if (!isChild(cur)) return false;
-    cur = parentOf(cur, byId);
+    cur = parentOf(cur, ctx);
   }
   return false;
 }
 /** The changed-file list in force: the simulation's override, else the
  * pipeline's own (or, for a child, the nearest ancestor's). */
-function effectiveFiles(p, sim, byId) {
+function effectiveFiles(p, sim, ctx) {
   if (sim.changedFiles) return sim.changedFiles;
   let cur = p;
   for (let i = 0; i < 64 && cur; i++) {
     if (cur.diff && cur.diff.files) return cur.diff.files;
     if (!isChild(cur)) return null;
-    cur = parentOf(cur, byId);
+    cur = parentOf(cur, ctx);
   }
   return null;
 }
 /** The changes checker of one pipeline (mirror of the wasm closure). */
-function changesChecker(p, sim, byId) {
-  const files = effectiveFiles(p, sim, byId);
+function changesChecker(p, sim, ctx) {
+  const files = effectiveFiles(p, sim, ctx);
   return (q) => {
     let list;
     if (q.compareTo !== null && q.compareTo !== undefined) {
@@ -857,24 +923,26 @@ function changesChecker(p, sim, byId) {
       : { kind: "assumed", b: sim.assumeChanges };
   };
 }
-function simAtoms(sim, p, byId) {
-  const changes = changesChecker(p, sim, byId);
+function simAtoms(sim, p, ctx) {
+  const changes = changesChecker(p, sim, ctx);
   return {
     changes: (q) => changes(q),
     exists: () => sim.assumeExists,
   };
 }
-function factsOf(p, sim, byId) {
+function factsOf(p, sim, ctx) {
   return {
     source: sourceOf(p, sim),
     refName: refNameOf(p, sim),
     isTag: isTagOf(p, sim),
-    pushEvent: pushEventOf(p, sim, byId),
+    pushEvent: pushEventOf(p, sim, ctx),
   };
 }
 
-/** The predefined CI_* table of a pipeline (without the simulation's own vars). */
-function pipelineVarTable(p, sim) {
+/** The predefined CI_* table of a pipeline plus its YAML variables, with the
+ * pipeline-level variables (simulation / forwarded) applied last. Without
+ * ctx, only a root's simulation variables apply (legacy callers). */
+function pipelineVarTable(p, sim, ctx, memo, depth = 0) {
   const t = new Map();
   const known = (k, v) => t.set(k, { k: "known", v: String(v) });
   const unset = (k) => t.set(k, { k: "unset" });
@@ -909,12 +977,13 @@ function pipelineVarTable(p, sim) {
   } else { unset("CI_COMMIT_TAG"); known("CI_COMMIT_BRANCH", ref); }
 
   for (const [k, v] of Object.entries(p.variables || {})) known(k, v);
+  applyLevel(t, ctx ? pipelineLevelVars(p, sim, ctx, memo, depth) : simulated(p) ? sim.vars : []);
   return t;
 }
-function jobVarTable(p, job, sim) {
-  const t = pipelineVarTable(p, sim);
+function jobVarTable(p, job, sim, ctx, memo, depth = 0) {
+  const t = pipelineVarTable(p, sim, ctx, memo, depth);
   for (const [k, v] of Object.entries(job.variables || {})) t.set(k, { k: "known", v: String(v) });
-  for (const [k, v] of sim.vars) applySimVar(t, k, v);
+  applyLevel(t, ctx ? pipelineLevelVars(p, sim, ctx, memo, depth) : simulated(p) ? sim.vars : []);
   return t;
 }
 
@@ -938,12 +1007,12 @@ function baseJobMap(G) {
 /** The JS fallback evaluator: job id → {outcome, blockedBy?, trace}. */
 function evaluateGraph(G, sim, baseJobOf) {
   const jobEval = new Map();
-  const byId = pipelineIndex(G);
+  const ctx = pipelineIndex(G);
+  const memo = new Map();
   for (const p of G.pipelines) {
-    const facts = factsOf(p, sim, byId);
-    const atoms = simAtoms(sim, p, byId);
-    const pvars = pipelineVarTable(p, sim);
-    for (const [k, v] of sim.vars) applySimVar(pvars, k, v);
+    const facts = factsOf(p, sim, ctx);
+    const atoms = simAtoms(sim, p, ctx);
+    const pvars = pipelineVarTable(p, sim, ctx, memo);
     const wf = p.workflow_rules
       ? evaluateRules(p.workflow_rules, pvars, "on_success", facts, atoms)
       : null;
@@ -952,7 +1021,7 @@ function evaluateGraph(G, sim, baseJobOf) {
       const src = baseJobOf.get(j.id) || j;
       let ev = cache.get(src.id);
       if (!ev) {
-        ev = evaluateRules(src.rules, jobVarTable(p, src, sim), src.when, facts, atoms);
+        ev = evaluateRules(src.rules, jobVarTable(p, src, sim, ctx, memo), src.when, facts, atoms);
         cache.set(src.id, ev);
       }
       if (wf && wf.outcome === "skipped") {
@@ -989,7 +1058,7 @@ if (typeof module === "object" && module && module.exports) {
     braceExpand, changesGlobToRegExp, changesMatcher, matchChanges, hasPushEvent,
     expandExisting, evalChanges, MAX_PATTERN_COMPARISONS,
     applySimVar, simAtoms, slugify, refNameOf, sourceOf, isTagOf, factsOf,
-    pipelineIndex, pushEventOf, effectiveFiles, changesChecker,
+    pipelineIndex, pipelineLevelVars, pushEventOf, effectiveFiles, changesChecker,
     pipelineVarTable, jobVarTable, baseJobMap, evaluateGraph, wasmSimOf,
   };
 }

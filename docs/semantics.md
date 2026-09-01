@@ -247,3 +247,26 @@ evaluate to false. Ruby value semantics: `&&`/`||` return operands; the
 statement result is `present?` (nil/false/blank-string are falsy). `=~`
 coerces a nil left side to `""`; the right side must be a regex literal or a
 variable whose value has `/…/flags` form.
+
+## `trigger:forward` and `rules:variables`
+
+Sources: <https://docs.gitlab.com/ci/yaml/#triggerforward>,
+<https://docs.gitlab.com/ci/yaml/#rulesvariables>,
+<https://docs.gitlab.com/ci/variables/#cicd-variable-precedence>.
+
+- A matched rule's `variables:` become variables of that job (they do not
+  influence the evaluation of the job's own rules, which happens first).
+  The graph records them per scenario in `evaluations[].variables`.
+- A bridge forwards to the pipeline it triggers, per its `trigger:forward`
+  (defaults `yaml_variables: true`, `pipeline_variables: false`):
+  - with `yaml_variables`: the parent's top-level `variables:`, the bridge's
+    own `variables:` and the bridge's matched `rules:variables`;
+  - with `pipeline_variables`: the parent's *pipeline* variables — for a root
+    pipeline the ones supplied when it was created (the simulation's
+    variables here), for a downstream pipeline what it received itself.
+- Forwarded variables are pipeline variables of the downstream pipeline: they
+  take precedence over that pipeline's YAML variables, as in GitLab.
+- The native evaluator, the WebAssembly build and the viewer's JS mirror all
+  compute the same inheritance (`trigger_edges[].forward` carries the flags
+  in the graph JSON); the parity suite holds them equal.
+

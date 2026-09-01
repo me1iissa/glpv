@@ -1,0 +1,59 @@
+---
+source: crates/glpv-cli/tests/snapshots.rs
+expression: graph.trigger_edges
+---
+[
+  {
+    "from_job": "p-aad3ac35c9d08c23/default-forward",
+    "to_pipeline": "p-80d6c5db3ef76d79",
+    "span": {
+      "file": 0,
+      "start": [
+        6,
+        1
+      ],
+      "end": [
+        6,
+        16
+      ]
+    }
+  },
+  {
+    "from_job": "p-aad3ac35c9d08c23/pipeline-vars-too",
+    "to_pipeline": "p-6c7a15cc0464106f",
+    "forward": {
+      "yaml_variables": true,
+      "pipeline_variables": true
+    },
+    "span": {
+      "file": 0,
+      "start": [
+        18,
+        1
+      ],
+      "end": [
+        18,
+        18
+      ]
+    }
+  },
+  {
+    "from_job": "p-aad3ac35c9d08c23/no-yaml-vars",
+    "to_pipeline": "p-59d0ab4e8ae8b69b",
+    "forward": {
+      "yaml_variables": false,
+      "pipeline_variables": false
+    },
+    "span": {
+      "file": 0,
+      "start": [
+        31,
+        1
+      ],
+      "end": [
+        31,
+        13
+      ]
+    }
+  }
+]

@@ -265,6 +265,19 @@ impl<'a> GraphBuilder<'a> {
             if let Some(job) = root.get(job_base) {
                 collect_yaml_vars(job.get("variables"), &mut t);
             }
+            // `rules:variables` of the bridge's matched clause are job
+            // variables too, and travel with the YAML variables.
+            if let Some(job) = self.pipelines[idx]
+                .jobs
+                .iter()
+                .find(|j| j.base_name.as_deref().unwrap_or(&j.name) == job_base)
+            {
+                let vars = self.trigger_vars(idx, job_base);
+                let eval = self.job_evaluation(idx, &job.rules, job.when, &vars);
+                for (k, v) in &eval.variables {
+                    t.set_known(k.clone(), v.clone());
+                }
+            }
             for (k, v) in t.iter() {
                 if let VarState::Known(s) = v {
                     out.insert(k.to_string(), s.clone());
@@ -281,57 +294,73 @@ impl<'a> GraphBuilder<'a> {
 
     /// Evaluate every job's rules under its pipeline's scenario, with
     /// workflow gating. Fills `job.evaluations` (one entry per job).
-    fn evaluate_graph(&mut self) {
+    /// Evaluate one rules chain in the context of pipeline `idx`: its
+    /// project tree for `exists:`, its diff for `changes:`, its scenario.
+    fn job_evaluation(
+        &self,
+        idx: usize,
+        rules: &model::RulesSummary,
+        job_when: model::When,
+        vars: &VarTable,
+    ) -> model::JobEvaluation {
         use crate::rules::{EvalContext, evaluate_rules};
 
+        let pctx = &self.ctxs[idx];
+        let p = &self.pipelines[idx];
+        let scenario = &pctx.scenario;
+        let default_branch = p
+            .default_branch
+            .clone()
+            .or_else(|| {
+                pctx.project
+                    .as_ref()
+                    .and_then(|pr| pr.default_branch().ok())
+            })
+            .unwrap_or_else(|| "main".to_string());
+        let ref_name = p
+            .git_ref
+            .clone()
+            .or_else(|| scenario.git_ref.clone())
+            .unwrap_or(default_branch);
+        let diff = pctx.diff.clone();
+        let changes_checker =
+            |q: &ChangesQuery<'_>| -> Option<ChangesMatch> { diff.as_ref()?.check(q) };
+        let exists_checker = |patterns: &[String]| -> Option<bool> {
+            let project = pctx.project.as_ref()?;
+            let tree = pctx.tree.as_ref()?;
+            let listing = project.list_tree(tree).ok()?;
+            Some(patterns.iter().any(|pat| {
+                let re = crate::glob::glob_to_regex(pat.trim_start_matches('/'));
+                listing.iter().any(|f| re.is_match(f))
+            }))
+        };
+        let ctx = EvalContext {
+            vars,
+            exists: Some(&exists_checker),
+            changes: Some(&changes_checker),
+            source: &scenario.source,
+            ref_name: &ref_name,
+            is_tag: scenario.is_tag,
+            push_event: pctx.push_event,
+        };
+        evaluate_rules(rules, &ctx, &scenario.id, job_when)
+    }
+
+    fn evaluate_graph(&mut self) {
         for idx in 0..self.pipelines.len() {
-            let Some(project) = self.ctxs[idx].project.clone() else {
+            if self.ctxs[idx].project.is_none() || self.ctxs[idx].tree.is_none() {
                 continue;
-            };
-            let Some(tree) = self.ctxs[idx].tree.clone() else {
-                continue;
-            };
-            let scenario = self.ctxs[idx].scenario.clone();
-            let default_branch = self.pipelines[idx]
-                .default_branch
-                .clone()
-                .or_else(|| project.default_branch().ok())
-                .unwrap_or_else(|| "main".to_string());
-            let ref_name = self.pipelines[idx]
-                .git_ref
-                .clone()
-                .or_else(|| scenario.git_ref.clone())
-                .unwrap_or(default_branch);
-            let is_tag = scenario.is_tag;
+            }
             let diff = self.ctxs[idx].diff.clone();
-            let push_event = self.ctxs[idx].push_event;
-            let changes_checker =
-                |q: &ChangesQuery<'_>| -> Option<ChangesMatch> { diff.as_ref()?.check(q) };
             // Expanded `compare_to` refs, for the graph JSON.
             let mut compare_refs: Vec<String> = Vec::new();
-
-            let exists_checker = |patterns: &[String]| -> Option<bool> {
-                let listing = project.list_tree(&tree).ok()?;
-                Some(patterns.iter().any(|p| {
-                    let re = crate::glob::glob_to_regex(p.trim_start_matches('/'));
-                    listing.iter().any(|f| re.is_match(f))
-                }))
-            };
 
             // Workflow gate first (pipeline-level variables only).
             let wf_vars = self.trigger_vars(idx, "");
             let wf_outcome = self.pipelines[idx].workflow_rules.as_ref().map(|wf| {
                 collect_compare_refs(wf, &wf_vars, &mut compare_refs);
-                let ctx = EvalContext {
-                    vars: &wf_vars,
-                    exists: Some(&exists_checker),
-                    changes: Some(&changes_checker),
-                    source: &scenario.source,
-                    ref_name: &ref_name,
-                    is_tag,
-                    push_event,
-                };
-                evaluate_rules(wf, &ctx, &scenario.id, model::When::OnSuccess).outcome
+                self.job_evaluation(idx, wf, model::When::OnSuccess, &wf_vars)
+                    .outcome
             });
 
             let mut evals = Vec::with_capacity(self.pipelines[idx].jobs.len());
@@ -345,16 +374,7 @@ impl<'a> GraphBuilder<'a> {
                 }
                 let vars = self.trigger_vars(idx, &base);
                 collect_compare_refs(&j.rules, &vars, &mut compare_refs);
-                let ctx = EvalContext {
-                    vars: &vars,
-                    exists: Some(&exists_checker),
-                    changes: Some(&changes_checker),
-                    source: &scenario.source,
-                    ref_name: &ref_name,
-                    is_tag,
-                    push_event,
-                };
-                let mut eval = evaluate_rules(&j.rules, &ctx, &scenario.id, j.when);
+                let mut eval = self.job_evaluation(idx, &j.rules, j.when, &vars);
                 match wf_outcome {
                     Some(model::Outcome::Skipped) => {
                         eval.outcome = model::Outcome::Blocked;
@@ -666,6 +686,7 @@ impl<'a> GraphBuilder<'a> {
                     to_pipeline: target_id.clone(),
                     cycle,
                     strategy: strategy.clone(),
+                    forward: forward.clone(),
                     span,
                 });
                 // Fill trigger.target on every expansion of this bridge.

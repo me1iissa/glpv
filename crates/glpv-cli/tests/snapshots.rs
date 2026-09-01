@@ -302,3 +302,61 @@ fn fx_changes_no_diff() {
     assert_eq!(diff.files, None);
     assert_eq!(diff.compare_to.len(), 1);
 }
+
+/// `trigger:forward` and `rules:variables`: what each child inherits.
+#[test]
+fn fx_forward() {
+    let mut scenario = Scenario::push_default();
+    scenario
+        .vars
+        .insert("PIPELINE_VAR".to_string(), "from-pipeline".to_string());
+    let output = scan_fixture_with("forward", ResolveOpts::default(), scenario);
+    let graph = &output.graph;
+    let outcome = |bridge: &str, job: &str| {
+        let child = graph
+            .pipelines
+            .iter()
+            .find(|p| p.parent.as_ref().is_some_and(|(_, b)| b == bridge))
+            .unwrap_or_else(|| panic!("child of {bridge}"));
+        child
+            .jobs
+            .iter()
+            .find(|j| j.name == job)
+            .unwrap_or_else(|| panic!("{job} in the child of {bridge}"))
+            .evaluations[0]
+            .outcome
+    };
+    use glpv_core::model::Outcome::{Runs, Unknown};
+    // A variable that is not forwarded is *unknown* in the child (a project
+    // or group variable of that name cannot be ruled out), never "unset".
+    // defaults: YAML + bridge + rule variables travel, pipeline variables do not
+    assert_eq!(outcome("default-forward", "from-root"), Runs);
+    assert_eq!(outcome("default-forward", "from-bridge"), Runs);
+    assert_eq!(outcome("default-forward", "from-rule"), Runs);
+    assert_eq!(outcome("default-forward", "from-pipeline"), Unknown);
+    assert_eq!(outcome("default-forward", "always"), Runs);
+    // pipeline_variables: true forwards the pipeline's own variables too
+    assert_eq!(outcome("pipeline-vars-too", "from-pipeline"), Runs);
+    assert_eq!(outcome("pipeline-vars-too", "from-rule"), Runs);
+    // yaml_variables: false forwards nothing
+    assert_eq!(outcome("no-yaml-vars", "from-root"), Unknown);
+    assert_eq!(outcome("no-yaml-vars", "from-bridge"), Unknown);
+    assert_eq!(outcome("no-yaml-vars", "from-pipeline"), Unknown);
+    assert_eq!(outcome("no-yaml-vars", "always"), Runs);
+    // the matched rule's variables are recorded on the bridge's evaluation
+    let root = graph.pipelines.iter().find(|p| p.parent.is_none()).unwrap();
+    let bridge = root
+        .jobs
+        .iter()
+        .find(|j| j.name == "default-forward")
+        .unwrap();
+    assert_eq!(
+        bridge.evaluations[0]
+            .variables
+            .get("RULE_VAR")
+            .map(String::as_str),
+        Some("from-rule")
+    );
+    // the forward flags travel in the graph JSON
+    insta::assert_json_snapshot!("forward_edges", graph.trigger_edges);
+}

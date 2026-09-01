@@ -88,6 +88,7 @@ const canonTrace = (t) => ({
 const canonEval = (e) => ({
   outcome: e.outcome,
   blockedBy: e.blockedBy ?? e.blocked_by ?? null,
+  variables: e.variables ?? {},
   trace: (e.trace ?? []).map(canonTrace),
 });
 const TRACE_KEYS = ["index", "result", "clause", "when", "varsUsed", "note"];
