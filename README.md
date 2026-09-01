@@ -33,7 +33,8 @@ trigger edges (dotted when rule-gated, labelled with the condition); a sim bar
 that re-evaluates every job as you change the pipeline source, ref, variables
 or changed files; a side panel with the rule trace, the invocation chain, "⚡
 Enable in simulation" and an outcome explorer; search (`/`), shareable links
-and a stack toggle for large fan-outs.
+and a stack toggle for large fan-outs. [docs/viewer.md](docs/viewer.md) is a
+tour of the viewer.
 
 ### Mermaid (`mermaid/overview.mmd` and `combined.mmd`)
 

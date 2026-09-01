@@ -753,11 +753,6 @@ function withDist(pts) {
   }
   return pts;
 }
-function needPts(x1, y1, x2, y2) {
-  const dx = Math.max(40, Math.abs(x2 - x1) / 2);
-  return withDist(cubicPts(x1, y1, x1 + dx, y1, x2 - dx, y2, x2, y2, 20, []));
-}
-
 function pillRect(id) {
   const i = scene.pillByJob.get(id);
   return i === undefined ? null : scene.pills[i];
@@ -2827,9 +2822,6 @@ function buildSimbar() {
  * later gates only unfold on paths that reach them, so even dozens of
  * unknowns stay tractable, and every leaf is a definitive verdict. */
 
-const SENT_UNSET = "\u0000unset";
-const SENT_OTHER = "\u0000other";
-
 function invocationHops(p) {
   const hops = [];
   let cur = p;
@@ -2886,11 +2878,6 @@ function gateChainFor(job, p) {
 function gateBaseTable(g) {
   if (g.job) return jobVarTable(g.pipeline, g.job, sim, gctx);
   return pipelineVarTable(g.pipeline, sim, gctx);
-}
-
-function simpleReLiteral(reSrc) {
-  const m = /^\/\^?([A-Za-z0-9_.-]+)\$?\/$/.exec(reSrc);
-  return m ? m[1] : null;
 }
 
 /** Per-gate, per-clause branch inputs. A clause question is "does this rule
