@@ -3,9 +3,10 @@
 //! switches the frame, so nested `include:local` and `rules:exists` inside it
 //! resolve in *that* project at *that* sha — GitLab's context rules.
 //!
-//! Whatever cannot be followed (unknown variables, missing clones, catalog-only
-//! component versions, remote URLs, artifact-generated configs) becomes a
-//! first-class unresolved node, never a silent drop.
+//! Whatever cannot be followed (unknown variables, missing clones, catalog
+//! versions without an API, remote URLs without `--allow-remote`,
+//! artifact-generated configs) becomes a first-class unresolved node, never
+//! a silent drop.
 
 use std::sync::Arc;
 
@@ -13,7 +14,7 @@ use glpv_yaml::{Kind, Node};
 use indexmap::IndexMap;
 
 use crate::glob::{glob_to_regex, is_glob};
-use crate::model::{self, IncludeKind, Severity, Unresolved, UnresolvedReason};
+use crate::model::{self, IncludeKind, ProjectRef, Severity, Unresolved, UnresolvedReason};
 use crate::resolve::context::{Frame, ResolveState, StackKey};
 use crate::resolve::document::load_document;
 use crate::resolve::merge::merge;
@@ -37,7 +38,11 @@ pub enum SpecKind {
         git_ref: Option<String>,
         files: Vec<String>,
     },
-    Remote(String),
+    Remote {
+        url: String,
+        /// `integrity: sha256-<base64>` — verified when the body is fetched.
+        integrity: Option<String>,
+    },
     Template(String),
     Component(String),
     /// `trigger:include`-only form; unresolvable statically.
@@ -117,7 +122,10 @@ fn normalize_entry(st: &mut ResolveState<'_>, node: &Node) -> IncludeSpec {
     let span = node.span;
     if let Some(text) = node.untag().scalar_text() {
         let kind = if text.starts_with("http://") || text.starts_with("https://") {
-            SpecKind::Remote(text.clone())
+            SpecKind::Remote {
+                url: text.clone(),
+                integrity: None,
+            }
         } else {
             SpecKind::Local(text.clone())
         };
@@ -196,7 +204,14 @@ fn normalize_entry(st: &mut ResolveState<'_>, node: &Node) -> IncludeSpec {
         }
         "remote" => {
             let u = text_of("remote");
-            (SpecKind::Remote(u.clone()), u)
+            let integrity = map.get("integrity").and_then(|n| n.scalar_text());
+            (
+                SpecKind::Remote {
+                    url: u.clone(),
+                    integrity,
+                },
+                u,
+            )
         }
         "template" => {
             let t = text_of("template");
@@ -348,23 +363,43 @@ fn eval_exists(
     patterns: &[String],
     spec: &IncludeSpec,
 ) -> Option<bool> {
-    match frame.project.list_tree(&frame.tree) {
-        Ok(listing) => Some(patterns.iter().any(|p| {
-            let re = glob_to_regex(p.trim_start_matches('/'));
-            listing.iter().any(|f| re.is_match(f))
-        })),
-        Err(e) => {
-            st.diag_at(
-                Severity::Warning,
-                "source.error",
-                format!(
-                    "cannot evaluate `exists` for `include: {}`: {e}",
-                    spec.location
-                ),
-                Some(spec.span.into()),
-            );
-            None
+    for p in patterns {
+        let p = p.trim_start_matches('/');
+        match frame
+            .project
+            .list_tree_under(&frame.tree, &literal_prefix(p))
+        {
+            Ok(listing) => {
+                let re = glob_to_regex(p);
+                if listing.iter().any(|f| re.is_match(f)) {
+                    return Some(true);
+                }
+            }
+            Err(e) => {
+                st.diag_at(
+                    Severity::Warning,
+                    "source.error",
+                    format!(
+                        "cannot evaluate `exists` for `include: {}`: {e}",
+                        spec.location
+                    ),
+                    Some(spec.span.into()),
+                );
+                return None;
+            }
         }
+    }
+    Some(false)
+}
+
+/// The directory a pattern can only match under: everything before its first
+/// glob metacharacter, cut at the last `/`. Lets a source list a subtree
+/// instead of the whole repository.
+fn literal_prefix(pattern: &str) -> String {
+    let literal_end = pattern.find(['*', '?', '[', '{']).unwrap_or(pattern.len());
+    match pattern[..literal_end].rfind('/') {
+        Some(slash) => pattern[..slash].to_string(),
+        None => String::new(),
     }
 }
 
@@ -468,7 +503,7 @@ fn expand_spec(
                         spec,
                         IncludeKind::Project,
                         UnresolvedReason::ProjectNotFound,
-                        e.to_string(),
+                        format!("no clone of {host}/{project_path} in the project index; {e}"),
                         None,
                     );
                     return Vec::new();
@@ -514,23 +549,9 @@ fn expand_spec(
             let target = match st.sources.locate(&key) {
                 Ok(Some(p)) => p,
                 _ => {
-                    record_unresolved(
-                        st,
-                        spec,
-                        IncludeKind::Template,
-                        UnresolvedReason::TemplateUnavailable,
-                        format!(
-                            "template `{name}` needs a clone of {}/{}",
-                            key.host, key.path_lc
-                        ),
-                        Some(
-                            "clone gitlab-org/gitlab into the projects folder (or set \
-                             defaults.templates_from in glpv.toml); the API source in M5 \
-                             removes this requirement"
-                                .to_string(),
-                        ),
-                    );
-                    return Vec::new();
+                    return expand_template_via_api(st, frame, vars, spec, &key, &name)
+                        .into_iter()
+                        .collect();
                 }
             };
             let Some(tree) =
@@ -560,24 +581,167 @@ fn expand_spec(
                 .into_iter()
                 .collect()
         }
-        SpecKind::Remote(url) => {
-            let (reason, detail, hint) = if st.opts.allow_remote {
-                (
-                    UnresolvedReason::NotYetImplemented,
-                    format!("remote include `{url}` (HTTP fetching arrives in M5)"),
-                    None,
-                )
-            } else {
-                (
+        SpecKind::Remote { url, integrity } => {
+            if !st.opts.allow_remote {
+                record_unresolved(
+                    st,
+                    spec,
+                    IncludeKind::Remote,
                     UnresolvedReason::RemoteDisabled,
                     format!("remote include `{url}`"),
-                    Some("pass --allow-remote to fetch remote includes (M5)".to_string()),
-                )
+                    Some("pass --allow-remote to fetch remote includes".to_string()),
+                );
+                return Vec::new();
+            }
+            let Some(url) = expand_location(st, spec, vars, url, IncludeKind::Remote) else {
+                return Vec::new();
             };
-            record_unresolved(st, spec, IncludeKind::Remote, reason, detail, hint);
-            Vec::new()
+            let Some(fetcher) = st.sources.remote.clone() else {
+                record_unresolved(
+                    st,
+                    spec,
+                    IncludeKind::Remote,
+                    UnresolvedReason::RemoteFailed,
+                    format!("remote include `{url}`: no HTTP fetcher is configured"),
+                    None,
+                );
+                return Vec::new();
+            };
+            let text = match fetcher.fetch(&url, integrity.as_deref()) {
+                Ok(t) => t,
+                Err(e) => {
+                    record_unresolved(
+                        st,
+                        spec,
+                        IncludeKind::Remote,
+                        UnresolvedReason::RemoteFailed,
+                        format!("cannot fetch remote include `{url}`: {e}"),
+                        None,
+                    );
+                    return Vec::new();
+                }
+            };
+            // A remote file has no project of its own; whatever it includes
+            // resolves against the including frame.
+            let fetched = Fetched {
+                origin: FileOrigin {
+                    project: None,
+                    sha: None,
+                    path: url.clone(),
+                },
+                key: StackKey {
+                    host: String::new(),
+                    path_lc: String::new(),
+                    tree: TreeRef::Worktree,
+                    file_path: url.clone(),
+                },
+                frame_project: frame.project.clone(),
+                frame_tree: frame.tree.clone(),
+                text,
+            };
+            if !admit(st, spec, IncludeKind::Remote, &url, &fetched.key, None) {
+                return Vec::new();
+            }
+            expand_text(st, frame, vars, fetched, &url, spec, IncludeKind::Remote)
+                .into_iter()
+                .collect()
         }
     }
+}
+
+/// `include:template` when no clone of the templates project is indexed:
+/// the instance's own `GET /templates/gitlab_ci_ymls/:key`. Templates keep
+/// the including project's context, so nested includes resolve there.
+fn expand_template_via_api(
+    st: &mut ResolveState<'_>,
+    frame: &Frame,
+    vars: &VarTable,
+    spec: &IncludeSpec,
+    key: &ProjectKey,
+    name: &str,
+) -> Option<Node> {
+    let path = format!("lib/gitlab/ci/templates/{name}");
+    let Some(api) = st.sources.api.clone() else {
+        record_unresolved(
+            st,
+            spec,
+            IncludeKind::Template,
+            UnresolvedReason::TemplateUnavailable,
+            format!(
+                "template `{name}` needs a clone of {}/{}",
+                key.host, key.path_lc
+            ),
+            Some(
+                "clone gitlab-org/gitlab into the projects folder (or set \
+                 defaults.templates_from in glpv.toml), or pass --api <host> to fetch \
+                 templates from the instance"
+                    .to_string(),
+            ),
+        );
+        return None;
+    };
+    let text = match api.template(name) {
+        Ok(Some(text)) => text,
+        Ok(None) => {
+            record_unresolved(
+                st,
+                spec,
+                IncludeKind::Template,
+                UnresolvedReason::TemplateUnavailable,
+                format!(
+                    "template `{name}` is not served by the template API of {} (it lists \
+                     top-level templates only) and no clone of {}/{} is indexed",
+                    api.host(),
+                    key.host,
+                    key.path_lc
+                ),
+                Some(
+                    "clone gitlab-org/gitlab into the projects folder (or set \
+                     defaults.templates_from in glpv.toml)"
+                        .to_string(),
+                ),
+            );
+            return None;
+        }
+        Err(e) => {
+            record_unresolved(
+                st,
+                spec,
+                IncludeKind::Template,
+                UnresolvedReason::TemplateUnavailable,
+                format!("template `{name}`: {e}"),
+                None,
+            );
+            return None;
+        }
+    };
+    let fetched = Fetched {
+        origin: FileOrigin {
+            project: Some(ProjectRef::new(key.host.clone(), key.path_lc.clone())),
+            sha: None,
+            path: path.clone(),
+        },
+        key: StackKey {
+            host: key.host.clone(),
+            path_lc: key.path_lc.clone(),
+            tree: TreeRef::Worktree,
+            file_path: path.clone(),
+        },
+        frame_project: frame.project.clone(),
+        frame_tree: frame.tree.clone(),
+        text,
+    };
+    if !admit(
+        st,
+        spec,
+        IncludeKind::Template,
+        &path,
+        &fetched.key,
+        Some(&key.path_lc),
+    ) {
+        return None;
+    }
+    expand_text(st, frame, vars, fetched, &path, spec, IncludeKind::Template)
 }
 
 /// `<host>/<project-path>/<component-name>@<version>` → resolved template file.
@@ -625,7 +789,7 @@ fn expand_component(
     let key = ProjectKey::new(host, project_path);
     let target = match st.sources.locate(&key) {
         Ok(Some(p)) => p,
-        _ => {
+        Ok(None) => {
             record_unresolved(
                 st,
                 spec,
@@ -638,37 +802,87 @@ fn expand_component(
             );
             return None;
         }
+        Err(e) => {
+            record_unresolved(
+                st,
+                spec,
+                IncludeKind::Component,
+                UnresolvedReason::ProjectNotFound,
+                format!("no clone of {host}/{project_path} in the project index; {e}"),
+                None,
+            );
+            return None;
+        }
     };
 
-    // Version precedence: catalog release → tag → branch/sha. Locally we can
-    // resolve exact refs; `~latest` and numeric shorthands need the catalog.
+    // Version precedence: catalog release → tag → branch/sha. Exact refs
+    // resolve in the project itself; `~latest` and numeric shorthands need
+    // the release list, which only the API provides.
     let sha = match target.resolve_ref(version) {
         Ok(Some(sha)) => sha,
         _ => {
             let is_catalog_form = version == "~latest"
                 || (version.chars().all(|c| c.is_ascii_digit() || c == '.')
                     && version.split('.').count() <= 2);
-            let (reason, hint) = if is_catalog_form {
-                (
-                    UnresolvedReason::ComponentNeedsCatalog,
-                    Some(
-                        "catalog versions (`~latest`, `1`, `1.2`) resolve through the \
-                         CI/CD Catalog API (M5); pin an exact tag to resolve locally"
-                            .to_string(),
-                    ),
-                )
-            } else {
-                (UnresolvedReason::RefNotFound, None)
-            };
-            record_unresolved(
-                st,
-                spec,
-                IncludeKind::Component,
-                reason,
-                format!("cannot resolve component version `{version}` of {host}/{project_path}"),
-                hint,
-            );
-            return None;
+            match catalog_version(st, &key, version, is_catalog_form) {
+                CatalogOutcome::Release(tag) => match target.resolve_ref(&tag) {
+                    Ok(Some(sha)) => sha,
+                    _ => {
+                        record_unresolved(
+                            st,
+                            spec,
+                            IncludeKind::Component,
+                            UnresolvedReason::RefNotFound,
+                            format!(
+                                "release `{tag}` of {host}/{project_path} (the catalog match for \
+                                 `{version}`) does not resolve to a commit"
+                            ),
+                            None,
+                        );
+                        return None;
+                    }
+                },
+                CatalogOutcome::NoMatch(detail) => {
+                    record_unresolved(
+                        st,
+                        spec,
+                        IncludeKind::Component,
+                        UnresolvedReason::ComponentNeedsCatalog,
+                        format!(
+                            "cannot resolve component version `{version}` of \
+                             {host}/{project_path}: {detail}"
+                        ),
+                        None,
+                    );
+                    return None;
+                }
+                CatalogOutcome::NoApi => {
+                    let (reason, hint) = if is_catalog_form {
+                        (
+                            UnresolvedReason::ComponentNeedsCatalog,
+                            Some(
+                                "catalog versions (`~latest`, `1`, `1.2`) resolve through the \
+                                 release list of the API (pass --api <host>); pin an exact tag \
+                                 to resolve locally"
+                                    .to_string(),
+                            ),
+                        )
+                    } else {
+                        (UnresolvedReason::RefNotFound, None)
+                    };
+                    record_unresolved(
+                        st,
+                        spec,
+                        IncludeKind::Component,
+                        reason,
+                        format!(
+                            "cannot resolve component version `{version}` of {host}/{project_path}"
+                        ),
+                        hint,
+                    );
+                    return None;
+                }
+            }
         }
     };
     let tree = TreeRef::Commit(sha);
@@ -705,6 +919,97 @@ fn expand_component(
         None,
     );
     None
+}
+
+enum CatalogOutcome {
+    /// The release tag the version selects.
+    Release(String),
+    /// The API answered but nothing matches (or the project has no releases).
+    NoMatch(String),
+    /// No API for this host, or a version form the catalog does not decide.
+    NoApi,
+}
+
+/// Resolve a catalog version form (`~latest`, `1`, `1.2`, or a full semantic
+/// version that is not a plain tag) through the project's release list.
+fn catalog_version(
+    st: &mut ResolveState<'_>,
+    key: &ProjectKey,
+    version: &str,
+    is_catalog_form: bool,
+) -> CatalogOutcome {
+    let Some(api) = st.sources.api.clone() else {
+        return CatalogOutcome::NoApi;
+    };
+    if api.host() != key.host {
+        return CatalogOutcome::NoApi;
+    }
+    let full_semver = semver::Version::parse(version.trim_start_matches(['v', 'V'])).is_ok();
+    if !is_catalog_form && !full_semver {
+        return CatalogOutcome::NoApi;
+    }
+    match api.release_tags(key) {
+        Ok(Some(tags)) => match pick_release(&tags, version) {
+            Some(tag) => CatalogOutcome::Release(tag),
+            None => CatalogOutcome::NoMatch(if tags.is_empty() {
+                "the project has no releases".to_string()
+            } else {
+                let shown: Vec<&str> = tags.iter().take(5).map(String::as_str).collect();
+                format!(
+                    "no release matches it (newest releases: {}{})",
+                    shown.join(", "),
+                    if tags.len() > shown.len() {
+                        ", …"
+                    } else {
+                        ""
+                    }
+                )
+            }),
+        },
+        Ok(None) => CatalogOutcome::NoMatch(
+            "the project has no releases visible through the API".to_string(),
+        ),
+        Err(e) => CatalogOutcome::NoMatch(e.to_string()),
+    }
+}
+
+/// The release tag a component version selects, per the CI/CD catalog
+/// rules: `~latest` is the highest semantic version, `1` / `1.2` the highest
+/// within that major / major.minor, a full version the exact match; a
+/// leading `v` on the tag is tolerated and pre-releases are only ever picked
+/// by an exact version.
+pub fn pick_release(tags: &[String], version: &str) -> Option<String> {
+    let parsed: Vec<(semver::Version, &String)> = tags
+        .iter()
+        .filter_map(|t| {
+            semver::Version::parse(t.trim_start_matches(['v', 'V']))
+                .ok()
+                .map(|v| (v, t))
+        })
+        .collect();
+    let wanted: Box<dyn Fn(&semver::Version) -> bool> = if version == "~latest" {
+        Box::new(|v: &semver::Version| v.pre.is_empty())
+    } else if let Ok(exact) = semver::Version::parse(version.trim_start_matches(['v', 'V'])) {
+        Box::new(move |v: &semver::Version| *v == exact)
+    } else {
+        let parts: Vec<u64> = version
+            .split('.')
+            .map(|p| p.parse::<u64>().ok())
+            .collect::<Option<Vec<_>>>()?;
+        if parts.is_empty() || parts.len() > 2 {
+            return None;
+        }
+        Box::new(move |v: &semver::Version| {
+            v.pre.is_empty()
+                && v.major == parts[0]
+                && parts.get(1).is_none_or(|minor| v.minor == *minor)
+        })
+    };
+    parsed
+        .into_iter()
+        .filter(|(v, _)| wanted(v))
+        .max_by(|(a, _), (b, _)| a.cmp(b))
+        .map(|(_, t)| t.clone())
 }
 
 /// Expand `$VARS` in an include location; unknown variables make the whole
@@ -747,7 +1052,7 @@ fn glob_targets(
     if !is_glob(rel) {
         return vec![rel.to_string()];
     }
-    match project.list_tree(tree) {
+    match project.list_tree_under(tree, &literal_prefix(rel)) {
         Ok(listing) => {
             let re = glob_to_regex(rel);
             listing
@@ -795,17 +1100,17 @@ fn resolve_project_tree(
     match project.resolve_ref(&ref_name) {
         Ok(Some(sha)) => Some(TreeRef::Commit(sha)),
         _ => {
-            record_unresolved(
-                st,
-                spec,
-                kind,
-                UnresolvedReason::RefNotFound,
-                format!(
+            let detail = match project.meta().origin {
+                crate::source::ProjectOrigin::LocalClone(_) => format!(
                     "ref `{ref_name}` not found in {} (fetch the clone?)",
                     project.meta().display_path
                 ),
-                None,
-            );
+                crate::source::ProjectOrigin::Api { .. } => format!(
+                    "ref `{ref_name}` not found in {} through the API",
+                    project.meta().display_path
+                ),
+            };
+            record_unresolved(st, spec, kind, UnresolvedReason::RefNotFound, detail, None);
             None
         }
     }
@@ -824,23 +1129,6 @@ fn fetch_file(
     spec: &IncludeSpec,
     kind: IncludeKind,
 ) -> Option<Node> {
-    st.budget_used += 1;
-    if st.budget_used > st.opts.max_includes {
-        record_unresolved_at(
-            st,
-            spec,
-            kind,
-            path,
-            UnresolvedReason::IncludeBudgetExceeded,
-            format!(
-                "maximum of {} includes exceeded at `{path}`",
-                st.opts.max_includes
-            ),
-            None,
-        );
-        return None;
-    }
-
     let meta = project.meta().clone();
     let key = StackKey {
         host: meta.key.host.clone(),
@@ -848,19 +1136,7 @@ fn fetch_file(
         tree: tree.clone(),
         file_path: path.to_string(),
     };
-    if st.stack.contains(&key) {
-        record_unresolved_at(
-            st,
-            spec,
-            kind,
-            path,
-            UnresolvedReason::Cycle,
-            format!(
-                "`{path}` of {} is already being included (include cycle)",
-                meta.display_path
-            ),
-            None,
-        );
+    if !admit(st, spec, kind, path, &key, Some(&meta.display_path)) {
         return None;
     }
 
@@ -896,17 +1172,96 @@ fn fetch_file(
         TreeRef::Commit(s) => Some(s.0.clone()),
         TreeRef::Worktree => None,
     };
-    let file_id = st.files.insert(
-        FileOrigin {
+    let fetched = Fetched {
+        origin: FileOrigin {
             project: Some(meta.project_ref()),
-            sha: sha.clone(),
+            sha,
             path: path.to_string(),
         },
-        text.clone(),
-    );
+        key,
+        frame_project: project,
+        frame_tree: tree,
+        text,
+    };
+    expand_text(st, parent_frame, vars, fetched, path, spec, kind)
+}
+
+/// Charge the include budget and refuse a file already on the include
+/// stack; records the unresolved node when it says no.
+fn admit(
+    st: &mut ResolveState<'_>,
+    spec: &IncludeSpec,
+    kind: IncludeKind,
+    path: &str,
+    key: &StackKey,
+    owner: Option<&str>,
+) -> bool {
+    st.budget_used += 1;
+    if st.budget_used > st.opts.max_includes {
+        record_unresolved_at(
+            st,
+            spec,
+            kind,
+            path,
+            UnresolvedReason::IncludeBudgetExceeded,
+            format!(
+                "maximum of {} includes exceeded at `{path}`",
+                st.opts.max_includes
+            ),
+            None,
+        );
+        return false;
+    }
+    if st.stack.contains(key) {
+        let owner = owner.map(|o| format!(" of {o}")).unwrap_or_default();
+        record_unresolved_at(
+            st,
+            spec,
+            kind,
+            path,
+            UnresolvedReason::Cycle,
+            format!("`{path}`{owner} is already being included (include cycle)"),
+            None,
+        );
+        return false;
+    }
+    true
+}
+
+/// A fetched include body and the frame its own includes resolve in.
+struct Fetched {
+    origin: FileOrigin,
+    key: StackKey,
+    frame_project: Arc<dyn ProjectSource>,
+    frame_tree: TreeRef,
+    text: String,
+}
+
+/// Register a fetched body, recurse into its includes with the switched
+/// frame, and return the fully-expanded document.
+#[allow(clippy::too_many_arguments)]
+fn expand_text(
+    st: &mut ResolveState<'_>,
+    parent_frame: &Frame,
+    vars: &VarTable,
+    fetched: Fetched,
+    path: &str,
+    spec: &IncludeSpec,
+    kind: IncludeKind,
+) -> Option<Node> {
+    let Fetched {
+        origin,
+        key,
+        frame_project,
+        frame_tree,
+        text,
+    } = fetched;
+    let project = origin.project.clone();
+    let sha = origin.sha.clone();
+    let file_id = st.files.insert(origin, text.clone());
     st.include_files.push(model::IncludeFile {
         file: file_id.0,
-        project: Some(meta.project_ref()),
+        project,
         sha,
         path: path.to_string(),
         kind,
@@ -916,8 +1271,8 @@ fn fetch_file(
     record_edge(st, parent_frame, spec, Some(file_id.0), false);
 
     let child_frame = Frame {
-        project,
-        tree,
+        project: frame_project,
+        tree: frame_tree,
         file: file_id,
         file_path: path.to_string(),
     };
@@ -1037,5 +1392,54 @@ fn unresolved_code(reason: UnresolvedReason) -> &'static str {
         UnresolvedReason::ReferenceDepth => "reference.too-deep",
         UnresolvedReason::InvalidConfig => "include.invalid",
         UnresolvedReason::NotYetImplemented => "include.not-yet-implemented",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{literal_prefix, pick_release};
+
+    fn tags(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn glob_prefixes_name_the_directory_to_list() {
+        assert_eq!(literal_prefix(".gitlab/ci/*.gitlab-ci.yml"), ".gitlab/ci");
+        assert_eq!(literal_prefix(".gitlab/ci/**/*.yml"), ".gitlab/ci");
+        assert_eq!(literal_prefix("**/*.yml"), "");
+        assert_eq!(literal_prefix("ci/{a,b}/x.yml"), "ci");
+        assert_eq!(literal_prefix("ci/x?.yml"), "ci");
+        assert_eq!(literal_prefix("ci/[ab].yml"), "ci");
+        assert_eq!(literal_prefix("Dockerfile"), "");
+        assert_eq!(literal_prefix("deploy/Dockerfile"), "deploy");
+    }
+
+    #[test]
+    fn catalog_versions_pick_releases_like_gitlab() {
+        let t = tags(&[
+            "1.0.0",
+            "1.2.0",
+            "1.2.3",
+            "v1.3.0",
+            "2.0.0-rc1",
+            "2.0.0",
+            "2.1.0-beta",
+            "junk",
+        ]);
+        assert_eq!(pick_release(&t, "~latest").as_deref(), Some("2.0.0"));
+        assert_eq!(pick_release(&t, "1").as_deref(), Some("v1.3.0"));
+        assert_eq!(pick_release(&t, "1.2").as_deref(), Some("1.2.3"));
+        assert_eq!(pick_release(&t, "1.2.0").as_deref(), Some("1.2.0"));
+        assert_eq!(
+            pick_release(&t, "2.1.0-beta").as_deref(),
+            Some("2.1.0-beta")
+        );
+        assert_eq!(pick_release(&t, "1.3.0").as_deref(), Some("v1.3.0"));
+        assert_eq!(pick_release(&t, "3"), None);
+        assert_eq!(pick_release(&t, "1.9"), None);
+        assert_eq!(pick_release(&t, "main"), None);
+        assert_eq!(pick_release(&tags(&["1.0.0-rc1"]), "~latest"), None);
+        assert_eq!(pick_release(&[], "~latest"), None);
     }
 }

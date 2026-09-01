@@ -24,6 +24,9 @@ pub struct Defaults {
     /// Index key (`host/group/project`) of a gitlab-org/gitlab clone that
     /// provides `include:template` files. Defaults to gitlab.com/gitlab-org/gitlab.
     pub templates_from: Option<String>,
+    /// GitLab host (or URL) whose REST API provides projects that are not
+    /// cloned locally, as if `--api <host>` were passed on every run.
+    pub api: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -279,3 +279,38 @@ Sources: <https://docs.gitlab.com/ci/yaml/#triggerforward>,
   compute the same inheritance (`trigger_edges[].forward` carries the flags
   in the graph JSON); the parity suite holds them equal.
 
+## API source (`--api`)
+
+Sources: <https://docs.gitlab.com/api/repositories/>,
+<https://docs.gitlab.com/api/repository_files/>,
+<https://docs.gitlab.com/api/commits/>, <https://docs.gitlab.com/api/releases/>,
+<https://docs.gitlab.com/api/templates/gitlab_ci_ymls/>,
+<https://docs.gitlab.com/ci/components/#component-versions>,
+<https://docs.gitlab.com/ci/yaml/includes/#include-with-integrity>;
+`lib/gitlab/ci/config/external/file/{template,remote}.rb`.
+
+- A ref resolves through `GET /projects/:id/repository/commits/:ref`: as
+  written first (branch, tag or sha), then `refs/tags/<ref>`, then
+  `refs/heads/<ref>` — the first answer wins, mirroring the local source's
+  `origin/<ref>` → tag → anything order. Project paths are looked up
+  lower-cased (`GET /projects/:path` matches case-insensitively).
+- The push diff is `GET …/repository/compare?from=<base>&to=<head>&straight=false`,
+  i.e. from the merge base of both (`base...head`), the same set as
+  `git diff --name-only base...head`. A rename contributes its old and its
+  new path (the local diff runs with `--no-renames`). A `compare_timeout`
+  answer is an error, never a partial list.
+- A tree listing is the API's recursive listing minus `tree` entries, in the
+  API's order (that of `git ls-tree -r`); `path=<dir>` lists just the
+  directory a glob or `exists` pattern can match under, which is the same
+  set the local source produces by filtering its full listing.
+- `include:template` served by `GET /templates/gitlab_ci_ymls/:key` (key =
+  name without `.gitlab-ci.yml`) keeps the including project's context, as
+  GitLab's `Template#expand_context_attrs` does; so does an `include:remote`
+  body, which has no project of its own. `integrity: sha256-<base64>` is
+  checked against the fetched body; a mismatch is an error, as in GitLab.
+- Catalog versions come from the component project's releases: `~latest`
+  is the highest semantic version that is not a pre-release, `1` / `1.2`
+  the highest within that major / major.minor (pre-releases excluded), a
+  full version the exact match; a leading `v` on the tag is tolerated. An
+  exact tag, branch or sha resolves in the project first, per GitLab's
+  precedence (sha over tag over branch).

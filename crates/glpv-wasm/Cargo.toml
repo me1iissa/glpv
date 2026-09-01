@@ -11,7 +11,7 @@ license.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-glpv-core = { path = "../glpv-core" }
+glpv-core = { path = "../glpv-core", default-features = false }
 serde = { workspace = true }
 serde_json = { workspace = true }
 indexmap = { workspace = true }

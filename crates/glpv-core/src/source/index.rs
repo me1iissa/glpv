@@ -13,7 +13,10 @@ use crate::source::local::LocalGitProject;
 use crate::source::{ProjectKey, ProjectLocator, ProjectMeta, ProjectSource, SourceError};
 
 const MAX_WALK_DEPTH: usize = 6;
-const SKIP_DIRS: [&str; 4] = ["node_modules", "target", ".glpv-clones", "vendor"];
+/// Where `glpv scan --clone-missing` puts its bare clones, under the first
+/// clone root: `<root>/.glpv-clones/<host>/<group>/<project>.git`.
+pub const CLONES_DIR: &str = ".glpv-clones";
+const SKIP_DIRS: [&str; 4] = ["node_modules", "target", CLONES_DIR, "vendor"];
 
 pub struct LocalIndex {
     by_key: HashMap<ProjectKey, Arc<LocalGitProject>>,
@@ -35,6 +38,9 @@ impl LocalIndex {
         let mut repo_dirs = Vec::new();
         for root in roots {
             find_repos(root, 0, &mut repo_dirs);
+            // The general walk skips dot directories; the clone cache is
+            // ours and is picked up explicitly (bare repositories inside).
+            find_repos(&root.join(CLONES_DIR), 0, &mut repo_dirs);
         }
         repo_dirs.sort();
         repo_dirs.dedup();
@@ -116,7 +122,7 @@ fn find_repos(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
     if depth > MAX_WALK_DEPTH {
         return;
     }
-    if dir.join(".git").exists() {
+    if dir.join(".git").exists() || is_bare_repo(dir) {
         if let Ok(canon) = dir.canonicalize() {
             out.push(canon);
         }
@@ -140,6 +146,12 @@ fn find_repos(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// A bare repository (`git clone --bare`): the object store sits directly
+/// in the directory instead of under `.git/`.
+fn is_bare_repo(dir: &Path) -> bool {
+    dir.join("HEAD").is_file() && dir.join("objects").is_dir() && dir.join("refs").is_dir()
+}
+
 fn diag(severity: Severity, code: &str, message: String) -> Diagnostic {
     Diagnostic {
         severity,
@@ -149,5 +161,89 @@ fn diag(severity: Severity, code: &str, message: String) -> Diagnostic {
         related: Vec::new(),
         hint: None,
         pipeline: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::process::Command;
+
+    use super::*;
+    use crate::source::TreeRef;
+
+    fn run(dir: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[test]
+    fn bare_clones_under_the_clone_cache_are_indexed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("projects");
+        let src = tmp.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        run(&src, &["init", "-q", "-b", "main"]);
+        run(&src, &["config", "commit.gpgsign", "false"]);
+        std::fs::write(src.join(".gitlab-ci.yml"), "job:\n  script: echo\n").unwrap();
+        run(&src, &["add", "-A"]);
+        run(&src, &["commit", "-q", "-m", "one"]);
+        run(&src, &["tag", "v1.0.0"]);
+
+        // What `--clone-missing` produces: a bare clone whose origin is the
+        // instance URL, under `<root>/.glpv-clones/<host>/<path>.git`.
+        let dest = root
+            .join(CLONES_DIR)
+            .join("gitlab.example.com/acme/api.git");
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        run(
+            tmp.path(),
+            &[
+                "clone",
+                "-q",
+                "--bare",
+                &src.display().to_string(),
+                &dest.display().to_string(),
+            ],
+        );
+        run(
+            &dest,
+            &[
+                "remote",
+                "set-url",
+                "origin",
+                "https://gitlab.example.com/acme/api.git",
+            ],
+        );
+
+        let index = LocalIndex::build(&[root], &[]);
+        assert!(index.diagnostics.is_empty(), "{:?}", index.diagnostics);
+        let project = index
+            .lookup(&ProjectKey::new("gitlab.example.com", "acme/api"))
+            .expect("the bare clone is indexed by its origin URL");
+        assert!(project.is_bare());
+        assert_eq!(project.meta().display_path, "acme/api");
+        assert_eq!(project.default_branch().unwrap(), "main");
+        let sha = project.resolve_ref("main").unwrap().expect("main resolves");
+        assert_eq!(project.resolve_ref("v1.0.0").unwrap(), Some(sha.clone()));
+        let tree = TreeRef::Commit(sha);
+        assert_eq!(
+            project.read(&tree, ".gitlab-ci.yml").unwrap().as_deref(),
+            Some("job:\n  script: echo\n")
+        );
+        assert_eq!(&*project.list_tree(&tree).unwrap(), &[".gitlab-ci.yml"]);
+        assert_eq!(project.tags().unwrap(), vec!["v1.0.0"]);
     }
 }

@@ -34,6 +34,9 @@ tempfile = "3"
 similar = "3"
 insta = { version = "1.48", features = ["json", "redactions"] }
 notify = "8"
+# The API source: a blocking client over rustls (no OpenSSL, static musl builds).
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+sha2 = "0.10"
 
 # The viewer's WebAssembly evaluator: small binary over fast compile.
 [profile.wasm-release]

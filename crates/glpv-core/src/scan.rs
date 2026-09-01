@@ -20,7 +20,7 @@ use crate::resolve::{Entry, PipelineRequest, ResolveOpts, resolve_pipeline};
 use crate::rules::changes::has_push_event;
 use crate::rules::{ChangesMatch, ChangesQuery};
 use crate::source::local::LocalGitProject;
-use crate::source::{ProjectKey, ProjectSource, SourceMap, Sources, TreeRef};
+use crate::source::{ProjectKey, ProjectOrigin, ProjectSource, SourceMap, Sources, TreeRef};
 use crate::vars::{Scenario, VarState, VarTable, predefined_vars};
 
 #[derive(thiserror::Error, Debug)]
@@ -856,13 +856,19 @@ impl<'a> GraphBuilder<'a> {
         let key = ProjectKey::new(&host, &project_path);
         let target = match self.sources.locate(&key) {
             Ok(Some(t)) => t,
-            _ => {
+            outcome => {
+                let detail = match outcome {
+                    Err(e) => {
+                        format!("no clone of {host}/{project_path} in the project index; {e}")
+                    }
+                    _ => format!("no clone of {host}/{project_path} in the project index"),
+                };
                 return unresolved(
                     self,
                     ProjectRef::new(host.clone(), project_path.clone()),
                     None,
                     UnresolvedReason::ProjectNotFound,
-                    format!("no clone of {host}/{project_path} in the project index"),
+                    detail,
                     Some(format!(
                         "clone it into the projects folder: `git clone git@{host}:{project_path}.git`"
                     )),
@@ -903,15 +909,22 @@ impl<'a> GraphBuilder<'a> {
         let sha = match target.resolve_ref(&target_ref_name) {
             Ok(Some(s)) => s,
             _ => {
+                let detail = match target.meta().origin {
+                    ProjectOrigin::LocalClone(_) => format!(
+                        "ref `{target_ref_name}` not found in the clone of {} (fetch it?)",
+                        target.meta().display_path
+                    ),
+                    ProjectOrigin::Api { .. } => format!(
+                        "ref `{target_ref_name}` not found in {} through the API",
+                        target.meta().display_path
+                    ),
+                };
                 return unresolved(
                     self,
                     target.meta().project_ref(),
                     Some(target_ref_name.clone()),
                     UnresolvedReason::RefNotFound,
-                    format!(
-                        "ref `{target_ref_name}` not found in the clone of {} (fetch it?)",
-                        target.meta().display_path
-                    ),
+                    detail,
                     None,
                 );
             }
@@ -946,15 +959,21 @@ impl<'a> GraphBuilder<'a> {
                         let _ = git_ref; // the config host's default branch is used
                         (path, Some(cp))
                     }
-                    _ => {
+                    outcome => {
+                        let detail = match outcome {
+                            Err(e) => format!(
+                                "ci_config_path of {project_path} lives in {host}/{project}, which is not in the index; {e}"
+                            ),
+                            _ => format!(
+                                "ci_config_path of {project_path} lives in {host}/{project}, which is not in the index"
+                            ),
+                        };
                         return unresolved(
                             self,
                             target.meta().project_ref(),
                             Some(target_ref_name),
                             UnresolvedReason::ProjectNotFound,
-                            format!(
-                                "ci_config_path of {project_path} lives in {host}/{project}, which is not in the index"
-                            ),
+                            detail,
                             Some(format!("clone it: `git clone git@{host}:{project}.git`")),
                         );
                     }

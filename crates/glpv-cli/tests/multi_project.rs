@@ -18,6 +18,8 @@ fn scan(root: &std::path::Path, host: &str, entry: &str) -> ScanOutput {
     let sources = Sources {
         locator: Some(index.clone()),
         templates_key: ProjectKey::new("gitlab.com", "gitlab-org/gitlab"),
+        api: None,
+        remote: None,
     };
     let project = index
         .lookup(&ProjectKey::new(host, entry))
@@ -163,6 +165,8 @@ fn scan_all_discovers_detached_and_reorders() {
     let sources = Sources {
         locator: Some(index.clone()),
         templates_key: ProjectKey::new("gitlab.com", "gitlab-org/gitlab"),
+        api: None,
+        remote: None,
     };
     let projects: Vec<Arc<dyn ProjectSource>> = index
         .all()

@@ -82,8 +82,9 @@ fn run_inner(args: CheckArgs) -> anyhow::Result<i32> {
         max_pipelines: 1,
         diff: None,
         changed_files: vec![],
+        clone_missing: false,
     };
-    let output = super::scan::run_scan(&scan_args, &scenario, &opts, vec![])?;
+    let (output, _setup) = super::scan::run_scan(&scan_args, &scenario, &opts, vec![])?;
     let Some(merged) = &output.merged_root else {
         super::print_diagnostics(&output.graph);
         anyhow::bail!("the configuration could not be resolved locally");

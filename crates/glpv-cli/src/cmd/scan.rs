@@ -55,13 +55,23 @@ pub struct ScanArgs {
     /// repository-relative).
     #[arg(long = "changed-file", value_name = "PATH")]
     pub changed_files: Vec<String>,
+    /// After the scan, bare-clone every project that was read through the
+    /// API into `<first --projects root>/.glpv-clones/<host>/<path>.git`
+    /// (blobless, with the files the scan read fetched) so later runs need
+    /// no API.
+    #[arg(long, requires = "api")]
+    pub clone_missing: bool,
 }
 
 pub fn run(args: ScanArgs) -> anyhow::Result<()> {
     let (scenario, opts) = build_opts(&args)?;
     let tool_args: Vec<String> = std::env::args().skip(1).collect();
-    let output = run_scan(&args, &scenario, &opts, tool_args)?;
-    write_outputs(&args, &output, &opts)
+    let (output, setup) = run_scan(&args, &scenario, &opts, tool_args)?;
+    write_outputs(&args, &output, &opts)?;
+    if args.clone_missing {
+        super::clone::clone_missing(&setup)?;
+    }
+    Ok(())
 }
 
 /// The scenario and resolver options a scan's flags describe.
@@ -150,13 +160,18 @@ pub fn write_outputs(
     Ok(())
 }
 
+/// Run the scan; the index setup comes back too, so the caller can act on
+/// what the API resolved (`--clone-missing`).
 pub fn run_scan(
     args: &ScanArgs,
     scenario: &glpv_core::vars::Scenario,
     opts: &ResolveOpts,
     tool_args: Vec<String>,
-) -> anyhow::Result<ScanOutput> {
-    let setup = args.index.build()?;
+) -> anyhow::Result<(ScanOutput, super::IndexSetup)> {
+    let mut setup = args.index.build()?;
+    if opts.allow_remote {
+        setup.sources.remote = Some(super::remote_fetcher(&setup, args.index.refresh)?);
+    }
 
     if args.all {
         let metas = setup.index.all();
@@ -168,25 +183,28 @@ pub fn run_scan(
             .filter_map(|m| setup.index.lookup(&m.key))
             .map(|p| p as Arc<dyn ProjectSource>)
             .collect();
-        return Ok(glpv_core::scan::scan_all(
+        let index_diags = setup.index_diags.clone();
+        let output = glpv_core::scan::scan_all(
             &setup.sources,
             projects,
             scenario,
             opts,
             tool_args,
-            setup.index_diags,
-        ));
+            index_diags,
+        );
+        return Ok((output, setup));
     }
 
     if let Some(file) = &args.file {
-        return Ok(scan_file(
+        let output = scan_file(
             file,
             args.git_ref.as_deref(),
             scenario,
             opts,
             &setup.sources,
             tool_args,
-        )?);
+        )?;
+        return Ok((output, setup));
     }
 
     let Some(entry) = &args.entry else {
@@ -199,7 +217,9 @@ pub fn run_scan(
                 setup.index.all().into_iter().map(|m| m.key.host).collect();
             match hosts.len() {
                 1 => hosts.into_iter().next().unwrap(),
-                0 => anyhow::bail!("the project index is empty; pass --projects <dir>"),
+                0 => anyhow::bail!(
+                    "the project index is empty; pass --projects <dir> (or --api <host>)"
+                ),
                 _ => anyhow::bail!(
                     "several hosts in the index ({}); pass --host",
                     hosts.into_iter().collect::<Vec<_>>().join(", ")
@@ -208,12 +228,14 @@ pub fn run_scan(
         }
     };
     let key = ProjectKey::new(&host, entry);
-    let Some(project) = setup.index.lookup(&key) else {
-        anyhow::bail!(
-            "{host}/{entry} is not in the index; run `glpv index --projects …` to see what is"
-        );
+    let project: Arc<dyn ProjectSource> = match setup.sources.locate(&key) {
+        Ok(Some(p)) => p,
+        Ok(None) => anyhow::bail!(
+            "{host}/{entry} is not in the index; run `glpv index --projects …` to see what is \
+             (or pass --api {host})"
+        ),
+        Err(e) => anyhow::bail!("{host}/{entry} is not in the index; {e}"),
     };
-    let project: Arc<dyn ProjectSource> = project;
 
     let ref_name = match &args.git_ref {
         Some(r) => r.clone(),
@@ -226,7 +248,8 @@ pub fn run_scan(
         );
     };
 
-    Ok(scan_entry(
+    let index_diags = setup.index_diags.clone();
+    let output = scan_entry(
         &setup.sources,
         project,
         TreeRef::Commit(sha),
@@ -235,6 +258,7 @@ pub fn run_scan(
         scenario,
         opts,
         tool_args,
-        setup.index_diags,
-    ))
+        index_diags,
+    );
+    Ok((output, setup))
 }

@@ -7,6 +7,11 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
+[features]
+default = ["api"]
+# `source::api`: the GitLab REST API as a project source (HTTP via reqwest).
+api = ["dep:reqwest", "dep:sha2"]
+
 [dependencies]
 glpv-yaml = { path = "../glpv-yaml" }
 indexmap = { workspace = true }
@@ -19,6 +24,8 @@ toml = { workspace = true }
 url = { workspace = true }
 blake3 = { workspace = true }
 tracing = { workspace = true }
+reqwest = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
 
 [dev-dependencies]
 insta = { workspace = true }

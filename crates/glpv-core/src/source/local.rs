@@ -16,23 +16,44 @@ type DiffCacheEntry = ((String, TreeRef), Option<std::sync::Arc<[String]>>);
 pub struct LocalGitProject {
     meta: ProjectMeta,
     root: PathBuf,
+    /// A bare repository (`git clone --bare`, e.g. from `--clone-missing`):
+    /// no working tree, `HEAD` names the default branch.
+    bare: bool,
     override_default_branch: Option<String>,
     tree_cache: Mutex<Vec<(TreeRef, std::sync::Arc<[String]>)>>,
     diff_cache: Mutex<Vec<DiffCacheEntry>>,
 }
 
 impl LocalGitProject {
-    /// Open the repository containing `dir`. Project identity comes from the
-    /// `origin` remote URL when parseable, else from the directory name.
+    /// Open the repository containing `dir` (a working tree or a bare
+    /// repository). Project identity comes from the `origin` remote URL when
+    /// parseable, else from the directory name.
     pub fn open(dir: &Path) -> Result<Self, SourceError> {
-        let root = git_str(dir, &["rev-parse", "--show-toplevel"])?
-            .ok_or_else(|| SourceError::NotAGitRepo(dir.to_path_buf()))?;
-        let root = PathBuf::from(root.trim());
+        let (root, bare) = match git_str(dir, &["rev-parse", "--show-toplevel"])? {
+            Some(top) => (PathBuf::from(top.trim()), false),
+            None => {
+                let is_bare = git_str(dir, &["rev-parse", "--is-bare-repository"])?
+                    .is_some_and(|s| s.trim() == "true");
+                let git_dir = if is_bare {
+                    git_str(dir, &["rev-parse", "--absolute-git-dir"])?
+                } else {
+                    None
+                };
+                match git_dir {
+                    Some(d) => (PathBuf::from(d.trim()), true),
+                    None => return Err(SourceError::NotAGitRepo(dir.to_path_buf())),
+                }
+            }
+        };
 
         let mut host = String::from("local");
         let mut display_path = root
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
+            .map(|n| match bare {
+                true => n.strip_suffix(".git").unwrap_or(&n).to_string(),
+                false => n,
+            })
             .unwrap_or_else(|| "unknown".to_string());
 
         if let Some(remotes) = git_str(&root, &["config", "--get-regexp", r"^remote\..*\.url$"])? {
@@ -64,6 +85,7 @@ impl LocalGitProject {
                 ci_config_path: None,
             },
             root,
+            bare,
             override_default_branch: None,
             tree_cache: Mutex::new(Vec::new()),
             diff_cache: Mutex::new(Vec::new()),
@@ -72,6 +94,10 @@ impl LocalGitProject {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub fn is_bare(&self) -> bool {
+        self.bare
     }
 
     /// Apply a `glpv.toml` `[[projects]]` override (identity, branch, config path).
@@ -158,6 +184,13 @@ impl ProjectSource for LocalGitProject {
         }
         if let Some(s) = self.git(&["symbolic-ref", "-q", "refs/remotes/origin/HEAD"])?
             && let Some(b) = s.trim().strip_prefix("refs/remotes/origin/")
+        {
+            return Ok(b.to_string());
+        }
+        // A bare clone's HEAD is the upstream default branch, not a checkout.
+        if self.bare
+            && let Some(s) = self.git(&["symbolic-ref", "-q", "HEAD"])?
+            && let Some(b) = s.trim().strip_prefix("refs/heads/")
         {
             return Ok(b.to_string());
         }

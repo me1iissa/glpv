@@ -245,7 +245,12 @@ Progress against the six-milestone plan:
   merged configuration and the rules-filtered job list against the server's
   lint API; CI runs it against reference projects, a fresh wasm build and the
   gitlab-org corpus.
-- [ ] M5 (API source) — scan without clones through the GitLab REST API.
+- [x] **M5 (API source)** — `--api <host>`: projects that are not cloned are
+  read through the GitLab REST API (raw files, trees, refs, tags, compare)
+  behind an on-disk cache; local clones stay preferred. Unlocks
+  `include:remote` (`--allow-remote`), `include:template` from the instance,
+  CI/CD catalog versions (`~latest`, `1`, `1.2`) via the release list, and
+  `--clone-missing` to back-fill bare clones for offline reruns.
 - [x] M6 (serve) — `glpv serve`: rescan on change, reload pushed to open
   viewers over server-sent events, URL state kept.
 - [ ] M6 (rest) — optional ELK layout, docs.
@@ -296,7 +301,27 @@ $ glpv check --file ../api/.gitlab-ci.yml --projects ~/projects
 glpv check acme/api @ main  (host gitlab.example.com)
 merged configuration: identical (16 top-level keys)
 jobs: server would create 11; local expects 11 to run (0 undecided) — identical
+
+# Without clones: whatever is not under --projects is read through the REST
+# API (public projects need no token; otherwise --token, $GLPV_TOKEN,
+# $GITLAB_TOKEN, glab's config and an authenticated `glab` are tried in turn).
+$ glpv scan --api gitlab.example.com --entry acme/api -o out/
+$ glpv scan --projects ~/projects --api --entry acme/api -o out/  # host from --host / glpv.toml
+$ glpv scan --api gitlab.com --entry gitlab-org/gitlab-foss --refresh -o out/  # re-resolve refs
+$ glpv scan --projects ~/projects --api gitlab.example.com --entry acme/api --clone-missing
+                                   # bare-clone what the API served into
+                                   # ~/projects/.glpv-clones/ — the next run is offline
+$ glpv scan --file .gitlab-ci.yml --allow-remote -o out/   # fetch include:remote (cached)
 ```
+
+Through the API, `include:template` comes from the instance's own template
+list, CI/CD catalog versions (`@~latest`, `@1`, `@1.2`) resolve through the
+component project's releases, and `include:remote` is fetched (with the
+token only for URLs on the configured host; `integrity:` is verified). Files
+at a commit, trees and diffs are cached for good under `~/.cache/glpv/<host>/`
+(`XDG_CACHE_HOME` is respected); ref lookups, tags, releases and templates
+for ten minutes. `defaults.api = "gitlab.example.com"` in `glpv.toml` makes
+the API a standing fallback.
 
 ## Development
 

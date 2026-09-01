@@ -46,8 +46,9 @@ pub fn run(args: ResolveArgs) -> anyhow::Result<()> {
         max_pipelines: 1,
         diff: None,
         changed_files: vec![],
+        clone_missing: false,
     };
-    let output = super::scan::run_scan(&scan_args, &scenario, &opts, vec![])?;
+    let (output, _setup) = super::scan::run_scan(&scan_args, &scenario, &opts, vec![])?;
 
     match &output.merged_root {
         None => anyhow::bail!("the configuration could not be resolved"),

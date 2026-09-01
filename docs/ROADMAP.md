@@ -83,16 +83,51 @@ push (no changed-paths set, like a tag) has no scenario flag of its own.
   suite against a wasm build made from source; a scheduled `corpus` job
   rescans gitlab-org/gitlab and asserts the known counts.
 
-## Phase D — API source (scan without clones)
+## Phase D — API source (scan without clones) (done)
 
-- `ApiProject` implementing the existing `ProjectSource` trait over the REST
-  API (project metadata, refs, raw files, recursive tree, tags), with an
-  on-disk immutable blob cache and short-TTL ref cache.
-- Transports: direct HTTP with a token, and a `glab api` fallback for OAuth
-  setups. Token discovery: flag > environment > glab config.
-- Unlocks: `include:remote` fetching, `include:template` without a local
-  gitlab clone, CI/CD catalog resolution for `~latest` and shorthand component
-  versions, and `--clone-missing` to backfill local clones for offline reruns.
+`glpv scan --api <host>` reads projects that are not in the clones folder
+through the REST API; the local index is always asked first (a
+`ChainLocator` over `LocalIndex` and `ApiLocator`).
+
+- `ApiProject: ProjectSource` over `GET /projects/:path` (id, default
+  branch, `ci_config_path`), `GET /projects/:id/repository/commits/:ref`
+  (ref → sha: as written, then `refs/tags/…`, then `refs/heads/…`),
+  `GET /projects/:id/repository/files/:path/raw?ref=<sha>`,
+  `GET /projects/:id/repository/tree?recursive=true&ref=<sha>&per_page=100&pagination=keyset[&path=<dir>]`
+  (globs and `rules:exists` list only the directory they can match under),
+  `GET /projects/:id/repository/tags?per_page=100` and
+  `GET /projects/:id/repository/compare?from=<base>&to=<head>&straight=false`
+  (merge-base diff; a rename contributes both paths). Pagination follows
+  `Link: rel="next"`, else `x-next-page`; a 429 is retried once after
+  `Retry-After`; 401/403/404 become diagnostics that never echo the token.
+- Cache (`$XDG_CACHE_HOME/glpv`, default `~/.cache/glpv`): per
+  `<host>/<project id>/`, `blobs/<sha>/<path>`, `tree/<sha>[/<dir>].json`
+  and `compare/<base>_<head>.json` for good; `refs/<ref>.json`, `tags.json`,
+  `releases.json`, `<host>/paths/<path>.json` (project metadata),
+  `<host>/templates/<key>.yml` and `remote/<sha256 of url>` for ten minutes
+  (`--refresh` bypasses them). Errors are never cached.
+- Transports: direct HTTPS (reqwest over rustls, so the static musl build
+  keeps working; `PRIVATE-TOKEN` for `glpat-` tokens, `Authorization: Bearer`
+  for everything else) or `glab api --include` for hosts glab is logged into
+  with OAuth. Discovery: `--token` → `GLPV_TOKEN` → `GITLAB_TOKEN` → glab's
+  config → `glab api` → anonymous.
+- Unlocked: `include:remote` with `--allow-remote` (cached by URL,
+  `integrity:` verified, credentials only for the configured host);
+  `include:template` from `GET /templates/gitlab_ci_ymls/:key` (the
+  instance serves its top-level templates; `Jobs/…` and other subdirectory
+  templates still come from a gitlab-org/gitlab clone or, when the API host
+  is gitlab.com, from that project through the API); catalog versions
+  `~latest`, `1`, `1.2` from `GET /projects/:id/releases?per_page=100`
+  (highest matching semantic version, pre-releases excluded);
+  `--clone-missing` bare-clones what the API served (`--filter=blob:none`,
+  the files the scan read fetched right away) into
+  `<first --projects root>/.glpv-clones/<host>/<path>.git`, which the index
+  picks up on the next run.
+
+Leftovers: the API source has no working tree (`--file` stays local); catalog
+versions are decided from the release list rather than the catalog itself, so
+a private component project needs a token that can see its releases; the
+template endpoint only knows top-level templates.
 
 ## Phase E — `glpv serve --watch` (done)
 

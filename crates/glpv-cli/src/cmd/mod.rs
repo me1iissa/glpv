@@ -1,4 +1,5 @@
 pub mod check;
+pub mod clone;
 pub mod index;
 pub mod resolve;
 pub mod scan;
@@ -9,8 +10,12 @@ use std::sync::Arc;
 
 use glpv_core::config::GlpvConfig;
 use glpv_core::model::Graph;
+use glpv_core::source::api::auth::{self, Credentials};
+use glpv_core::source::api::cache::ApiCache;
+use glpv_core::source::api::transport::{GlabTransport, HttpsTransport, Transport};
+use glpv_core::source::api::{ApiClient, ApiLocator, split_origin};
 use glpv_core::source::index::LocalIndex;
-use glpv_core::source::{ProjectKey, Sources};
+use glpv_core::source::{ChainLocator, InstanceApi, ProjectKey, ProjectLocator, Sources};
 use glpv_core::vars::Scenario;
 use indexmap::IndexMap;
 
@@ -67,15 +72,38 @@ pub struct IndexArgs {
     /// Path to glpv.toml (default: ./glpv.toml, then $XDG_CONFIG_HOME/glpv/config.toml).
     #[arg(long)]
     pub config: Option<PathBuf>,
+    /// Read projects that are not cloned through the GitLab REST API of this
+    /// host (or URL); with no value, the --host / glpv.toml host. Local
+    /// clones are still preferred.
+    #[arg(long, value_name = "HOST", num_args = 0..=1, default_missing_value = "")]
+    pub api: Option<String>,
+    /// API token (personal/project access token, or an OAuth token); else
+    /// $GLPV_TOKEN, $GITLAB_TOKEN, glab's config, `glab api`, anonymous.
+    #[arg(long, value_name = "TOKEN")]
+    pub token: Option<String>,
+    /// Ask the API again for refs, tags, releases and project metadata
+    /// instead of trusting the ten-minute cache (file contents at a sha are
+    /// immutable and stay cached).
+    #[arg(long)]
+    pub refresh: bool,
+}
+
+/// The configured instance API.
+pub struct ApiSetup {
+    pub client: Arc<ApiClient>,
+    pub locator: Arc<ApiLocator>,
 }
 
 pub struct IndexSetup {
     pub sources: Sources,
     pub index: Arc<LocalIndex>,
-    #[allow(dead_code)] // carried for M4/M5 consumers (scenario defaults, hosts)
+    #[allow(dead_code)] // carried for later consumers (scenario defaults, hosts)
     pub config: GlpvConfig,
     pub index_diags: Vec<glpv_core::model::Diagnostic>,
     pub host: Option<String>,
+    /// The clone roots the index was built from.
+    pub roots: Vec<PathBuf>,
+    pub api: Option<ApiSetup>,
 }
 
 impl IndexArgs {
@@ -96,18 +124,82 @@ impl IndexArgs {
             .map(|(host, path)| ProjectKey::new(host, path))
             .unwrap_or_else(|| ProjectKey::new("gitlab.com", "gitlab-org/gitlab"));
 
-        let host = self.host.clone().or_else(|| config.defaults.host.clone());
+        let mut host = self.host.clone().or_else(|| config.defaults.host.clone());
+        let api_host = match &self.api {
+            Some(h) if !h.trim().is_empty() => Some(h.trim().to_string()),
+            Some(_) => Some(host.clone().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--api needs a host: pass --api <host>, --host <host>, or set \
+                     defaults.host in glpv.toml"
+                )
+            })?),
+            None => config.defaults.api.clone(),
+        };
+        let api = match api_host {
+            Some(h) => Some(build_api(&h, self.token.as_deref(), self.refresh)?),
+            None => None,
+        };
+        if host.is_none()
+            && let Some(a) = &api
+        {
+            host = Some(a.client.host().to_string());
+        }
+        let locator: Arc<dyn ProjectLocator> = match &api {
+            Some(a) => Arc::new(ChainLocator::new(vec![
+                index.clone() as Arc<dyn ProjectLocator>,
+                a.locator.clone() as Arc<dyn ProjectLocator>,
+            ])),
+            None => index.clone(),
+        };
         Ok(IndexSetup {
             sources: Sources {
-                locator: Some(index.clone()),
+                locator: Some(locator),
                 templates_key,
+                api: api
+                    .as_ref()
+                    .map(|a| a.client.clone() as Arc<dyn InstanceApi>),
+                remote: None,
             },
             index,
             config,
             index_diags,
             host,
+            roots,
+            api,
         })
     }
+}
+
+/// Credentials → transport → client for one instance.
+fn build_api(host_or_url: &str, token: Option<&str>, refresh: bool) -> anyhow::Result<ApiSetup> {
+    let (origin, host) = split_origin(host_or_url);
+    let (creds, label) = auth::discover(&host, token);
+    let transport: Box<dyn Transport> = match creds {
+        Credentials::Token(a) => Box::new(HttpsTransport::new(Some(a), label)?),
+        Credentials::Glab => Box::new(GlabTransport::new(&host, &format!("{origin}/api/v4/"))?),
+        Credentials::Anonymous => Box::new(HttpsTransport::new(None, label)?),
+    };
+    let cache = ApiCache::new(ApiCache::default_root(), refresh);
+    let client = Arc::new(ApiClient::new(host_or_url, transport, cache));
+    Ok(ApiSetup {
+        locator: Arc::new(ApiLocator::new(client.clone())),
+        client,
+    })
+}
+
+/// The `include:remote` fetcher for `--allow-remote`: the configured API
+/// (credentials for its own host) or anonymous HTTPS.
+pub fn remote_fetcher(
+    setup: &IndexSetup,
+    refresh: bool,
+) -> anyhow::Result<Arc<dyn glpv_core::source::RemoteFetcher>> {
+    Ok(match &setup.api {
+        Some(a) => a.client.clone(),
+        None => Arc::new(glpv_core::source::api::RemoteOnly::new(
+            Box::new(HttpsTransport::new(None, "anonymous")?),
+            ApiCache::new(ApiCache::default_root(), refresh),
+        )),
+    })
 }
 
 pub fn print_diagnostics(graph: &Graph) {

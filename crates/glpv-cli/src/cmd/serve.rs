@@ -37,7 +37,7 @@ pub fn run(args: ServeArgs) -> anyhow::Result<()> {
         // the live loop only needs what the browser loads
         scan_args.format = "html,json".to_string();
     }
-    let output = super::scan::run_scan(&scan_args, &scenario, &opts, tool_args.clone())?;
+    let (output, _setup) = super::scan::run_scan(&scan_args, &scenario, &opts, tool_args.clone())?;
     super::scan::write_outputs(&scan_args, &output, &opts)?;
 
     let generation = Arc::new(Generation::default());
@@ -94,7 +94,7 @@ pub fn run(args: ServeArgs) -> anyhow::Result<()> {
                     }
                 );
                 match super::scan::run_scan(&scan_args, &scenario, &opts, tool_args.clone())
-                    .and_then(|o| super::scan::write_outputs(&scan_args, &o, &opts).map(|_| o))
+                    .and_then(|(o, _)| super::scan::write_outputs(&scan_args, &o, &opts).map(|_| o))
                 {
                     Ok(_) => {
                         let g = generation.bump();
