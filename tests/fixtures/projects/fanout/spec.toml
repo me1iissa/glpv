@@ -1,0 +1,58 @@
+# A parent that triggers four identical child pipelines: exercised by the
+# viewer's stack-collapse tests (near-identical sibling children fold into
+# one card).
+dir = "fanout-project"
+remote = "git@fixtures.local:fx/fanout.git"
+default_branch = "main"
+
+[[commits]]
+message = "fan out to per-component child pipelines"
+
+[commits.files]
+"ci/component.yml" = '''
+stages: [build, test]
+
+build-component:
+  stage: build
+  script: [make build]
+
+test-component:
+  stage: test
+  needs: [build-component]
+  script: [make test]
+'''
+".gitlab-ci.yml" = '''
+stages: [prepare, fanout, collect]
+
+prepare:
+  stage: prepare
+  script: [make prepare]
+
+component-alpha:
+  stage: fanout
+  trigger:
+    include: ci/component.yml
+    strategy: depend
+
+component-beta:
+  stage: fanout
+  trigger:
+    include: ci/component.yml
+    strategy: depend
+
+component-gamma:
+  stage: fanout
+  trigger:
+    include: ci/component.yml
+    strategy: depend
+
+component-delta:
+  stage: fanout
+  trigger:
+    include: ci/component.yml
+    strategy: depend
+
+collect:
+  stage: collect
+  script: [make collect]
+'''

@@ -351,10 +351,110 @@ const scene = {
   labels: [],
 };
 
+/* ---- stack collapse ----
+ * Runs of near-identical leaf child pipelines (same parent, kind, trigger
+ * label, stages and job names — gitlab's 37 per-gem children) fold into one
+ * card with a stacked-paper look; clicking it expands the group in place.
+ * Off by default (topbar toggle; `stk` in the URL). */
+
+let stackMode = false;
+let stackToggle = null; // the topbar checkbox
+const expandedStacks = new Set(); // group keys opened by the user
+let stackGroups = new Map(); // key -> {key, rep, members, names}
+const hiddenByStack = new Map(); // pipeline id -> representative pipeline id
+const stackCardOf = new Map(); // member pipeline id -> card index of the representative
+
+function computeStackGroups() {
+  stackGroups = new Map();
+  hiddenByStack.clear();
+  const hasOutgoing = new Set();
+  const triggerInto = new Map();
+  for (const e of G.trigger_edges) {
+    const src = pipeOfJob.get(e.from_job);
+    if (src) hasOutgoing.add(src.id);
+    if (!triggerInto.has(e.to_pipeline)) triggerInto.set(e.to_pipeline, e);
+  }
+  const byKey = new Map();
+  for (const p of G.pipelines) {
+    if (!p.parent || p.unresolved || hasOutgoing.has(p.id)) continue; // leaves only
+    const te = triggerInto.get(p.id);
+    const bridge = te ? jobById(te.from_job) : null;
+    const label = te ? triggerStyle(bridge, te).label : "";
+    const bases = [...new Set(p.jobs.map((j) => j.base_name || j.name))].sort();
+    const key = [
+      p.project.host + "/" + p.project.path, p.depth, p.parent[0], p.kind, label,
+      (p.stages || []).join(""), bases.join(""),
+    ].join("|");
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(p);
+  }
+  for (const [key, members] of byKey) {
+    if (members.length < 3) continue;
+    stackGroups.set(key, { key, rep: members[0], members, names: members.map((m) => m.parent[1]) });
+    if (stackMode && !expandedStacks.has(key))
+      for (const m of members.slice(1)) hiddenByStack.set(m.id, members[0].id);
+  }
+}
+function visiblePipelines() {
+  return G.pipelines.filter((p) => !hiddenByStack.has(p.id));
+}
+function stackKeyOf(pid) {
+  for (const g of stackGroups.values()) if (g.members.some((m) => m.id === pid)) return g.key;
+  return null;
+}
+/** The card a pipeline is drawn in: its own, or its stack's representative. */
+function cardOfPipeline(pid) {
+  if (hiddenByStack.has(pid)) {
+    const i = stackCardOf.get(pid);
+    return i === undefined ? undefined : scene.cards[i];
+  }
+  return scene.cards.find((c) => c.p.id === pid);
+}
+function pickStackCard(wx, wy) {
+  for (const cd of scene.cards)
+    if (cd.stack && wx >= cd.x && wx <= cd.x + cd.w && wy >= cd.y && wy <= cd.y + cd.h) return cd;
+  return null;
+}
+
+/** Rebuild the board (layout, edges, grid, adjacency) keeping the camera. */
+function relayout() {
+  const keep = { ...view };
+  for (const k of ["bands", "cards", "stageTitles", "pills", "edges", "labels"]) scene[k].length = 0;
+  scene.pillByJob.clear();
+  grid.clear();
+  for (const m of Object.values(adj)) m.clear();
+  hoverIdx = -1;
+  hoverLabel = -1;
+  hoverLit = null;
+  buildScene();
+  buildSearchIndex();
+  if (mode === "webgl2") buildEdgeGeometry();
+  selLineage =
+    selectedJob && scene.pillByJob.has(selectedJob) ? traceLineage(scene.pillByJob.get(selectedJob)) : null;
+  matchSet = searchUI && searchUI.input.value ? matchesFor(searchUI.input.value) : null;
+  applyEval();
+  Object.assign(view, keep);
+  draw();
+  scheduleHashWrite();
+}
+function setStackMode(on) {
+  stackMode = !!on;
+  expandedStacks.clear();
+  if (stackToggle && stackToggle.checked !== stackMode) stackToggle.checked = stackMode;
+  relayout();
+}
+function expandStack(key) {
+  if (!key || expandedStacks.has(key)) return;
+  expandedStacks.add(key);
+  relayout();
+}
+
 function buildScene() {
+  computeStackGroups();
+  const visible = visiblePipelines();
   // --- per-card content layout (local coordinates) ---
   const locals = new Map(); // pid -> {w, h, pills:[], titles:[]}
-  for (const p of G.pipelines) {
+  for (const p of visible) {
     if (p.unresolved) {
       const title =
         (p.kind === "dynamic_child" ? "dynamic child pipeline" : "unresolved") +
@@ -471,7 +571,7 @@ function buildScene() {
   // --- board layout: columns by trigger depth, rows by project ---
   const projects = [];
   const byProject = new Map();
-  for (const p of G.pipelines) {
+  for (const p of visible) {
     const key = p.project.host + "/" + p.project.path;
     if (!byProject.has(key)) {
       byProject.set(key, []);
@@ -574,7 +674,7 @@ function buildScene() {
   scene.colX = colX;
 
   // --- flatten to world coordinates ---
-  for (const p of G.pipelines) {
+  for (const p of visible) {
     const loc = locals.get(p.id);
     const pos = cardPos.get(p.id);
     const cardIdx = scene.cards.length;
@@ -596,6 +696,10 @@ function buildScene() {
       })),
       corridorY: loc.corridor ? pos.y + loc.h - 7 : null,
     };
+    if (stackMode) {
+      const key = stackKeyOf(p.id);
+      if (key && !expandedStacks.has(key)) card.stack = stackGroups.get(key);
+    }
     scene.cards.push(card);
     for (const t of loc.titles)
       scene.stageTitles.push({ x: pos.x + t.x, y: pos.y + t.y, text: t.text, w: t.w });
@@ -609,6 +713,10 @@ function buildScene() {
     }
   }
 
+  stackCardOf.clear();
+  scene.cards.forEach((c, i) => {
+    if (c.stack) for (const m of c.stack.members) stackCardOf.set(m.id, i);
+  });
   // The grid indexes pills only and must exist before edges are routed:
   // the label allocator consults it to keep labels off pills.
   buildGrid();
@@ -836,7 +944,7 @@ function buildEdges() {
   for (const e of G.trigger_edges) {
     const bridge = jobById(e.from_job);
     const from = bridge ? pillRect(payloadJob(bridge).id) : null;
-    const toCard = scene.cards.find((c) => c.p.id === e.to_pipeline);
+    const toCard = cardOfPipeline(e.to_pipeline);
     if (!from || !toCard) continue;
     if (e.cycle || toCard.x < from.x) {
       cycles.push({ e, bridge, from, toCard });
@@ -1811,8 +1919,20 @@ function drawText() {
   for (const cd of scene.cards) {
     if (!rectVisible(cd, vis)) continue;
     c.globalAlpha = cd.dim ? 0.45 : 1;
+    if (cd.stack) {
+      // sheets behind the card, offset down-right
+      c.strokeStyle = css(PAL.line);
+      c.lineWidth = 1.2;
+      for (const off of [5, 10]) {
+        c.beginPath();
+        c.moveTo(cd.x + off, cd.y + cd.h + off);
+        c.lineTo(cd.x + cd.w + off, cd.y + cd.h + off);
+        c.lineTo(cd.x + cd.w + off, cd.y + off);
+        c.stroke();
+      }
+    }
     if (cd.w * s >= 56) {
-      const kind = KIND_LABEL[cd.p.kind] || cd.p.kind;
+      const kind = (KIND_LABEL[cd.p.kind] || cd.p.kind) + (cd.stack ? " ×" + cd.stack.members.length : "");
       let x = cd.x + CARD_PAD;
       const chipW = textW(kind, F.badge) + 12;
       roundRectPath(c, x, cd.y + 9, chipW, 17, 5);
@@ -1822,7 +1942,14 @@ function drawText() {
       c.fillStyle = css(PAL.accent);
       c.fillText(kind, x + 6, cd.y + 21);
       x += chipW + 8;
-      if (s > 0.35) {
+      if (s > 0.35 && cd.stack) {
+        c.font = F.small;
+        c.fillStyle = css(PAL.ink);
+        const what =
+          cd.stack.members.length + " " + (KIND_LABEL[cd.p.kind] || cd.p.kind) +
+          " pipelines: " + cd.stack.names.join(", ");
+        c.fillText(fitText(what, F.small, Math.max(0, cd.x + cd.w - 26 - x)), x, cd.y + 21);
+      } else if (s > 0.35) {
         c.font = F.small;
         c.fillStyle = css(PAL.ink);
         const refText = "@ " + (cd.p.git_ref || "worktree");
@@ -2267,6 +2394,7 @@ function currentState() {
   if (sim.assumeExists !== null) st.ae = sim.assumeExists;
   if (selectedJob) st.sel = selectedJob;
   if (edgeMode !== "focus") st.mode = edgeMode;
+  if (stackMode) st.stk = 1;
   st.cam = [
     Math.round(view.scale * 1000) / 1000,
     Math.round((vw / 2 - view.tx) / view.scale),
@@ -2313,6 +2441,8 @@ function applyState(st) {
   sim.assumeExists = st.ae === true || st.ae === false ? st.ae : null;
   if (refreshSimBarFn) refreshSimBarFn();
   setEdgeMode(st.mode === "all" || st.mode === "triggers" ? st.mode : "focus");
+  const wantStack = st.stk === 1 || st.stk === true;
+  if (wantStack !== stackMode) setStackMode(wantStack);
   const sel = typeof st.sel === "string" && pipeOfJob.has(st.sel) ? st.sel : null;
   if (sel && sel !== selectedJob) selectJob(sel); // selectJob toggles: never repeat the id
   else if (!sel && selectedJob) selectJob(null);
@@ -2456,6 +2586,18 @@ function buildTopbar() {
     "How needs edges are drawn. Hover a job to see its direct dependencies; click it to trace the full chain.";
   modeSel.addEventListener("change", () => setEdgeMode(modeSel.value));
   topbar.appendChild(modeSel);
+
+  computeStackGroups();
+  const stackWrap = h("label", "chip stack-toggle");
+  stackToggle = h("input");
+  stackToggle.type = "checkbox";
+  stackToggle.checked = stackMode;
+  stackWrap.append(stackToggle, document.createTextNode(" stack children"));
+  stackWrap.title =
+    "fold runs of near-identical child pipelines into one card; click a stack to expand it";
+  stackWrap.hidden = stackGroups.size === 0;
+  stackToggle.addEventListener("change", () => setStackMode(stackToggle.checked));
+  topbar.appendChild(stackWrap);
 
   topbar.appendChild(h("span", "spacer"));
   topbar.appendChild(buildSearchBox());
@@ -3338,6 +3480,8 @@ function selectJob(id) {
     applyEval();
     return;
   }
+  const hp = pipeOfJob.get(id);
+  if (hp && hiddenByStack.has(hp.id)) expandStack(stackKeyOf(hp.id));
   selectedJob = id;
   const idx = scene.pillByJob.get(id);
   selLineage = idx === undefined ? null : traceLineage(idx);
@@ -3877,6 +4021,10 @@ viewport.addEventListener("pointermove", (e) => {
     }
     draw();
   }
+  if (idx < 0 && lIdx < 0 && stackMode) {
+    const want = pickStackCard(w.x, w.y) ? "pointer" : "grab";
+    if (viewport.style.cursor !== want) viewport.style.cursor = want;
+  }
 });
 function endDrag(e) {
   if (!dragState) return;
@@ -3894,7 +4042,11 @@ function endDrag(e) {
       const sp = scene.labels[lIdx].srcPill;
       flyTo(sp);
       selectJob(scene.pills[sp].id);
-    } else if (selectedJob) selectJob(null); // click on empty space clears the trace
+    } else {
+      const sc = pickStackCard(w.x, w.y);
+      if (sc) expandStack(sc.stack.key);
+      else if (selectedJob) selectJob(null); // click on empty space clears the trace
+    }
   }
 }
 viewport.addEventListener("pointerup", endDrag);
@@ -4084,5 +4236,9 @@ Object.assign(window.__glpv, {
     write: writeHash, lastHash: () => lastHash,
   },
   camera: { fitCard, flyTo, fitView, zoomAt },
+  stacks: {
+    groups: () => stackGroups, expanded: () => expandedStacks, hidden: () => hiddenByStack,
+    setEnabled: setStackMode, expand: expandStack, relayout,
+  },
   errors: __glpvErrors,
 });

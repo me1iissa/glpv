@@ -37,7 +37,8 @@ Progress against the six-milestone plan:
   pan/zoom, click-through to rule traces, provenance (file:line opens the
   embedded source) and effective YAML; job/pipeline/stage search (`/`) and
   shareable links (the simulation, selection, edge mode and camera live in
-  the URL hash — "copy link").
+  the URL hash — "copy link"); an optional "stack children" toggle folds runs
+  of near-identical child pipelines into one expandable card.
 - [x] **M4 (rules engine)** — GitLab-faithful `rules:if` evaluator (Ruby value
   semantics, RE2 regexes, three-valued with `unknown`), `workflow:rules`
   gating, legacy only/except refs, per-job traces in the graph JSON — and a

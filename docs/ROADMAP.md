@@ -43,9 +43,12 @@ assumption. Replace that with a real diff:
   camera as a world-space centre so a link survives another window size) and
   restored on load; "copy link" in the topbar. A scanned HTML plus a hash is
   a reproducible "look at this" link.
-- **Stack collapse**: an optional toggle that collapses runs of near-identical
-  sibling child pipelines (e.g. 37 per-gem children) into one expandable
-  stacked card.
+- **Stack collapse** — done (reduced scope): a topbar toggle folds runs of
+  ≥3 near-identical *leaf* child pipelines (same parent, kind, trigger label,
+  stages and job names — e.g. 37 per-gem children) into one stacked card;
+  trigger branches route into it, clicking it (or selecting one of its jobs,
+  e.g. from a link) expands the group in place with the camera preserved.
+  The toggle travels in the URL (`stk`).
 
 ## Phase C — `glpv check`: the automated oracle
 

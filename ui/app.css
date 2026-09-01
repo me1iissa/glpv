@@ -488,3 +488,5 @@ button.explore:hover { filter: brightness(1.06); }
 .search-row .l { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .search-row .s { margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap; }
 .zoombar button.ok { color: var(--ok); border-color: var(--ok); }
+.stack-toggle { cursor: pointer; user-select: none; }
+.stack-toggle input { vertical-align: -1px; margin: 0 2px 0 0; }

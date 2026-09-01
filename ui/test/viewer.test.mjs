@@ -412,3 +412,90 @@ describe("search and URL state (fixtures, js)", () => {
     }
   });
 });
+
+/* ---------------- stack collapse ---------------- */
+
+describe("stack collapse (fixtures, js)", () => {
+  let v, glpv, window, G, html;
+  const j = (x) => JSON.parse(JSON.stringify(x));
+  before(async () => {
+    html = readSample(FIXTURES).html;
+    v = await loadViewer(html, { wasm: false });
+    ({ glpv, window } = v);
+    G = glpv.G;
+  });
+  after(() => v && v.close());
+  const clean = () => assert.equal(v.errors.length, 0, v.errors.join("\n"));
+  const fanoutGroup = () =>
+    [...glpv.stacks.groups().values()].find((g) => g.members[0].project.path === "fx/fanout");
+
+  test("near-identical leaf children form a group; the toggle folds them into one card and back", () => {
+    const g = fanoutGroup();
+    assert.ok(g, "fx/fanout group");
+    assert.equal(g.members.length, 4);
+    assert.deepEqual(j(g.names), ["component-alpha", "component-beta", "component-gamma", "component-delta"]);
+    const toggle = window.document.querySelector(".stack-toggle input");
+    assert.ok(toggle && !toggle.parentElement.hidden, "toggle shown when groups exist");
+    const cards0 = glpv.scene.cards.length, pills0 = glpv.scene.pills.length;
+    const view0 = j(glpv.view);
+
+    glpv.stacks.setEnabled(true);
+    assert.equal(toggle.checked, true);
+    assert.equal(glpv.scene.cards.length, cards0 - 3, "three member cards folded away");
+    assert.equal(glpv.scene.pills.length, pills0 - 3 * 2, "their pills too");
+    const stackCard = glpv.scene.cards.find((c) => c.stack);
+    assert.ok(stackCard, "one stack card");
+    assert.equal(stackCard.stack.members.length, 4);
+    assert.ok(glpv.scene.labels.some((l) => l.lines.includes("×4")), "the bus label still says ×4");
+    const memberIds = new Set(g.members.map((m) => m.id));
+    const into = glpv.scene.edges.filter((e) => e.toPipeline && memberIds.has(e.toPipeline));
+    assert.equal(into.length, 4, "every bridge still has a branch, routed into the stack card");
+    assert.deepEqual(j(glpv.view), view0, "camera preserved across the relayout");
+    assert.equal(glpv.state.current().stk, 1);
+    assert.equal(glpv.search.index().filter((e) => e.kind === "pipeline").length, glpv.scene.cards.length);
+
+    // selecting a hidden member's job expands the group first
+    const hiddenJob = g.members[2].jobs[0].id;
+    assert.ok(glpv.stacks.hidden().has(g.members[2].id));
+    glpv.selectJob(hiddenJob);
+    assert.ok(glpv.stacks.expanded().has(g.key));
+    assert.equal(glpv.scene.cards.length, cards0);
+    assert.equal(glpv.selectedJob, hiddenJob);
+    assert.ok(!glpv.panel.classList.contains("hidden"));
+
+    glpv.stacks.setEnabled(false);
+    assert.equal(toggle.checked, false);
+    assert.equal(glpv.scene.cards.length, cards0);
+    assert.equal(glpv.stacks.expanded().size, 0);
+    assert.equal(glpv.state.current().stk, undefined);
+    clean();
+  });
+
+  test("clicking a stack card expands it in place", () => {
+    glpv.selectJob(null);
+    glpv.stacks.setEnabled(true);
+    const cd = glpv.scene.cards.find((c) => c.stack);
+    const cardsFolded = glpv.scene.cards.length;
+    const cx = (cd.x + cd.w / 2) * glpv.view.scale + glpv.view.tx;
+    const cy = (cd.y + 10) * glpv.view.scale + glpv.view.ty; // the header, off any pill
+    const ev = (type) => new window.PointerEvent(type, { clientX: cx, clientY: cy, pointerId: 1, bubbles: true });
+    glpv.viewport.dispatchEvent(ev("pointerdown"));
+    glpv.viewport.dispatchEvent(ev("pointerup"));
+    assert.ok(glpv.stacks.expanded().has(cd.stack.key), "expanded by click");
+    assert.equal(glpv.scene.cards.length, cardsFolded + 3);
+    glpv.stacks.setEnabled(false);
+    clean();
+  });
+
+  test("stk in a link restores the folded board", async () => {
+    const cards0 = glpv.scene.cards.length;
+    const v2 = await loadViewer(html, { wasm: false, hash: "#" + glpv.state.encode({ v: 1, stk: 1 }) });
+    try {
+      assert.equal(v2.glpv.scene.cards.length, cards0 - 3);
+      assert.equal(v2.window.document.querySelector(".stack-toggle input").checked, true);
+      assert.equal(v2.errors.length, 0, v2.errors.join("\n"));
+    } finally {
+      v2.close();
+    }
+  });
+});
