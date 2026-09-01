@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use glpv_core::model::{AllowFailure, Job, Outcome, Pipeline, When};
 use glpv_yaml::FileId;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 /// Top-level keys that carry no meaning once includes are expanded.
@@ -36,6 +36,64 @@ pub struct Oracle {
     pub message: Option<Value>,
     #[serde(default)]
     pub error: Option<Value>,
+}
+
+/// A job of a pipeline the server actually created, as the Jobs and Bridges
+/// APIs describe it (`GET /projects/:id/pipelines/:id/jobs` and `/bridges`).
+/// Both are readable with the job token of any job in that pipeline, so a
+/// comparison against them needs no other credential.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PipelineJob {
+    pub name: String,
+    #[serde(default)]
+    pub stage: String,
+    /// Only set for jobs whose `when` is not the default.
+    #[serde(default)]
+    pub when: Option<String>,
+    #[serde(default)]
+    pub allow_failure: bool,
+    #[serde(default)]
+    pub status: String,
+}
+
+/// The oracle's view of a real pipeline: names, stages, `allow_failure` and
+/// the `when` values the API reports; no scripts (the API has none).
+pub fn pipeline_jobs_to_oracle<'a>(
+    jobs: impl IntoIterator<Item = &'a PipelineJob>,
+) -> Vec<OracleJob> {
+    jobs.into_iter()
+        .map(|j| OracleJob {
+            name: j.name.clone(),
+            stage: j.stage.clone(),
+            script: Vec::new(),
+            before_script: Vec::new(),
+            after_script: Vec::new(),
+            when: j.when.clone().unwrap_or_default(),
+            allow_failure: j.allow_failure,
+        })
+        .collect()
+}
+
+/// Which fields `compare_jobs_with` holds the two sides to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompareFields {
+    /// `script`, `before_script`, `after_script` (the lint API has them).
+    pub scripts: bool,
+    /// `when` — compared only for jobs where the server reports one.
+    pub when: bool,
+}
+
+impl CompareFields {
+    /// Everything the lint API returns.
+    pub const ALL: CompareFields = CompareFields {
+        scripts: true,
+        when: true,
+    };
+    /// What the Jobs API of a real pipeline can vouch for.
+    pub const PIPELINE: CompareFields = CompareFields {
+        scripts: false,
+        when: true,
+    };
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -220,6 +278,14 @@ impl JobReport {
 }
 
 pub fn compare_jobs(local: &[LocalJob], server: &[OracleJob]) -> JobReport {
+    compare_jobs_with(local, server, CompareFields::ALL)
+}
+
+pub fn compare_jobs_with(
+    local: &[LocalJob],
+    server: &[OracleJob],
+    fields: CompareFields,
+) -> JobReport {
     let mut report = JobReport::default();
     let by_name: HashMap<&str, &OracleJob> = server.iter().map(|j| (j.name.as_str(), j)).collect();
     let mut seen: Vec<&str> = Vec::new();
@@ -240,23 +306,27 @@ pub fn compare_jobs(local: &[LocalJob], server: &[OracleJob]) -> JobReport {
                         }
                     };
                     field("stage", l.stage.clone(), s.stage.clone());
-                    field("when", l.when.clone(), s.when.clone());
+                    if fields.when && !s.when.is_empty() {
+                        field("when", l.when.clone(), s.when.clone());
+                    }
                     field(
                         "allow_failure",
                         l.allow_failure.to_string(),
                         s.allow_failure.to_string(),
                     );
-                    field("script", l.script.join("\n"), s.script.join("\n"));
-                    field(
-                        "before_script",
-                        l.before_script.join("\n"),
-                        s.before_script.join("\n"),
-                    );
-                    field(
-                        "after_script",
-                        l.after_script.join("\n"),
-                        s.after_script.join("\n"),
-                    );
+                    if fields.scripts {
+                        field("script", l.script.join("\n"), s.script.join("\n"));
+                        field(
+                            "before_script",
+                            l.before_script.join("\n"),
+                            s.before_script.join("\n"),
+                        );
+                        field(
+                            "after_script",
+                            l.after_script.join("\n"),
+                            s.after_script.join("\n"),
+                        );
+                    }
                 }
             },
             Outcome::Skipped | Outcome::Blocked => {

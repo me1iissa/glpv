@@ -17,6 +17,11 @@ Source and releases: <https://github.com/me1iissa/glpv> (static Linux and
 Windows binaries under Releases; `CHANGELOG.md` has the history, and
 versions follow [semantic versioning](docs/VERSIONING.md)).
 
+Every release asset comes with a `SHA256SUMS` and a Sigstore build-provenance
+attestation from the GitHub workflow that built it: `sha256sum -c SHA256SUMS`
+checks the download, `gh attestation verify <asset> -R me1iissa/glpv` checks
+that this repository's release workflow built it from the tagged commit.
+
 ## What a scan produces
 
 **Live examples** — <https://me1iissa.github.io/glpv/>: the five-project demo
@@ -247,8 +252,10 @@ Progress against the six-milestone plan:
 - [ ] M4 (rest) — richer scenario sets.
 - [x] M5 (oracle) — `glpv check` resolves a project locally and diffs the
   merged configuration and the rules-filtered job list against the server's
-  lint API; CI runs it against reference projects, a fresh wasm build and the
-  gitlab-org corpus.
+  lint API; `glpv check --pipeline` does the job-list half inside any CI job
+  against the pipeline it runs in, with no credential to configure (this
+  repository's `check:self` job runs it on every pipeline). CI also checks a
+  fresh wasm build and the gitlab-org corpus.
 - [x] **M5 (API source)** — `--api <host>`: projects that are not cloned are
   read through the GitLab REST API (raw files, trees, refs, tags, compare)
   behind an on-disk cache; local clones stay preferred. Unlocks
@@ -309,6 +316,16 @@ $ glpv check --file ../api/.gitlab-ci.yml --projects ~/projects
 glpv check acme/api @ main  (host gitlab.example.com)
 merged configuration: identical (16 top-level keys)
 jobs: server would create 11; local expects 11 to run (0 undecided) — identical
+
+# Inside a CI job, with no credential to configure: the oracle is the pipeline
+# the job runs in — the jobs the server actually created, read with the job's
+# own token — under the real source, ref, tag and push diff. Scripts are not
+# compared (the Jobs API has none); the job set, stages, allow_failure and
+# manual/delayed `when` are. Put it in any project's pipeline:
+#   check:self: { script: [glpv check --pipeline] }
+$ glpv check --pipeline
+glpv check --pipeline: acme/api pipeline #4711 — source push, ref main, changes since 3f2a9c1e0b7d
+jobs: server created 11; local expects 11 to run (0 undecided) — identical
 
 # Without clones: whatever is not under --projects is read through the REST
 # API (public projects need no token; otherwise --token, $GLPV_TOKEN,
@@ -379,3 +396,14 @@ GitLab semantics implemented here are documented in `docs/semantics.md`,
 with sources. Planned work lives in `docs/ROADMAP.md`; the versioning and
 release rules in `docs/VERSIONING.md`. `node ui/test/shot-cli.mjs <index.html>
 <out.png>` renders a scan headlessly (the README screenshot is made that way).
+
+### The GitHub mirror's workflows
+
+GitHub is a publish target, not a place where history is written: the
+workflows under `.github/workflows/` run on the automatic workflow token and
+the runner's OIDC identity only — there is no secret to configure. They
+follow the same rules throughout: `permissions: {}` at the top and the
+minimum per job, every action pinned to a commit SHA (Dependabot proposes
+the bumps; they are applied on the primary, never merged on GitHub), no
+cache on the path that ships bytes, and `ci.yml` lints the workflows
+themselves with zizmor and actionlint before anything else runs.

@@ -82,6 +82,13 @@ push (no changed-paths set, like a tag) has no scenario flag of its own.
   merge drift fails the pipeline; `samples`/`ui-test` also run the parity
   suite against a wasm build made from source; a scheduled `corpus` job
   rescans gitlab-org/gitlab and asserts the known counts.
+- `glpv check --pipeline`: the token-free oracle for CI. The lint API is
+  closed to `CI_JOB_TOKEN` (and to anonymous access on public projects), but
+  the Jobs and Bridges APIs of the pipeline a job runs in are not — so the
+  job compares glpv's expectation under the real source, ref, tag and push
+  diff with the jobs the server actually created (scripts excepted). A
+  `check:self` job runs it on every pipeline of this repository; any project
+  can add the same one-line job without configuring a credential.
 
 ## Phase D — API source (scan without clones) (done)
 

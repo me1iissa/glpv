@@ -2,6 +2,12 @@
 //! server to lint the same entry file at the same ref (`merged_yaml` +
 //! `include_jobs`), and report every difference. Exit 0 when identical, 1 on
 //! differences, 2 when the check could not be carried out.
+//!
+//! `--pipeline` is the token-free variant for CI: the oracle is the pipeline
+//! the job runs in — the jobs the server actually created, read with the
+//! job's own `CI_JOB_TOKEN` — and the scenario is the real one (source, ref,
+//! tag, diff base) from the CI environment. Scripts are not compared (the
+//! Jobs API does not carry them); everything else is.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -42,6 +48,28 @@ pub struct CheckArgs {
     /// Compare only the merged configuration, not the job list.
     #[arg(long)]
     pub merged_only: bool,
+    /// Compare against the pipeline this job runs in (or --pipeline-id): the
+    /// jobs the server created, read with the job token. Needs no other
+    /// credential; source, ref, tag and diff base come from the CI environment.
+    #[arg(long, conflicts_with_all = ["entry", "oracle_json", "merged_only"])]
+    pub pipeline: bool,
+    /// The pipeline to compare against (default: $CI_PIPELINE_ID).
+    #[arg(long, requires = "pipeline")]
+    pub pipeline_id: Option<u64>,
+    /// Its project, id or path (default: $CI_PROJECT_ID).
+    #[arg(long, requires = "pipeline")]
+    pub project_id: Option<String>,
+    /// Use a saved pipeline snapshot (written by --save-oracle in --pipeline mode).
+    #[arg(long, requires = "pipeline")]
+    pub pipeline_json: Option<PathBuf>,
+}
+
+/// What `--save-oracle` stores in `--pipeline` mode.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PipelineSnapshot {
+    pipeline: serde_json::Value,
+    jobs: Vec<check::PipelineJob>,
+    bridges: Vec<check::PipelineJob>,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -60,7 +88,261 @@ pub fn run(args: CheckArgs) -> anyhow::Result<()> {
     })
 }
 
+fn env_nonempty(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|v| !v.trim().is_empty())
+}
+
+fn root_pipeline(
+    output: &glpv_core::scan::ScanOutput,
+) -> anyhow::Result<&glpv_core::model::Pipeline> {
+    output
+        .graph
+        .pipelines
+        .iter()
+        .find(|p| p.kind == glpv_core::model::PipelineKind::Root)
+        .or_else(|| output.graph.pipelines.first())
+        .ok_or_else(|| anyhow::anyhow!("no pipeline was resolved"))
+}
+
+/// Print the job comparison; 0 when clean, 1 otherwise.
+fn report_jobs(
+    root: &glpv_core::model::Pipeline,
+    server_jobs: &[check::OracleJob],
+    fields: check::CompareFields,
+    server_label: &str,
+) -> i32 {
+    use glpv_core::model::Outcome;
+    let local_jobs = check::local_jobs(root);
+    let r = check::compare_jobs_with(&local_jobs, server_jobs, fields);
+    let expected = local_jobs
+        .iter()
+        .filter(|j| {
+            matches!(
+                j.outcome,
+                Outcome::Runs | Outcome::Manual | Outcome::Delayed
+            )
+        })
+        .count();
+    println!(
+        "jobs: server {server_label} {}; local expects {} to run ({} undecided){}",
+        server_jobs.len(),
+        expected,
+        r.undecided.len(),
+        if r.is_clean() { " — identical" } else { "" }
+    );
+    for j in &r.missing_on_server {
+        println!("  local runs, server does not create: {j}");
+    }
+    for j in &r.unexpected_on_server {
+        println!("  server creates, local skips or lacks: {j}");
+    }
+    for (job, field, a, b) in &r.field_mismatches {
+        println!(
+            "  {job}: {field} differs\n    local:  {}\n    server: {}",
+            oneline(a),
+            oneline(b)
+        );
+    }
+    if !r.undecided.is_empty() {
+        println!(
+            "  undecided locally (unknown variables): {}",
+            r.undecided.join(", ")
+        );
+    }
+    if r.is_clean() { 0 } else { 1 }
+}
+
+/// `--pipeline`: the oracle is the pipeline this job runs in.
+fn run_pipeline(args: CheckArgs) -> anyhow::Result<i32> {
+    use glpv_core::diff::DiffSpec;
+
+    // The real scenario, from the CI environment; --var still adds to it.
+    let mut sargs = args.scenario.clone();
+    if let Some(s) = env_nonempty("CI_PIPELINE_SOURCE") {
+        sargs.source = s;
+    }
+    if let Some(r) = env_nonempty("CI_COMMIT_REF_NAME") {
+        sargs.sim_ref = Some(r);
+    }
+    if env_nonempty("CI_COMMIT_TAG").is_some() {
+        sargs.tag = true;
+    }
+    let scenario = sargs.to_scenario()?;
+    // The push diff: the merge request's base, else the previous head of the
+    // branch. A new branch (all-zero before sha) has no diff, as in GitLab.
+    let diff_base = env_nonempty("CI_MERGE_REQUEST_DIFF_BASE_SHA")
+        .or_else(|| env_nonempty("CI_COMMIT_BEFORE_SHA").filter(|s| s.chars().any(|c| c != '0')));
+    let file = args.file.clone().unwrap_or_else(|| {
+        let dir = env_nonempty("CI_PROJECT_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+        dir.join(env_nonempty("CI_CONFIG_PATH").unwrap_or_else(|| ".gitlab-ci.yml".to_string()))
+    });
+    let opts = ResolveOpts {
+        max_pipelines: 1,
+        diff: diff_base.clone().map(DiffSpec::Base),
+        ..ResolveOpts::default()
+    };
+    let scan_args = super::scan::ScanArgs {
+        file: Some(file),
+        entry: None,
+        all: false,
+        git_ref: None,
+        config_path: None,
+        index: args.index.clone(),
+        scenario: sargs.clone(),
+        out: PathBuf::new(),
+        format: String::new(),
+        no_embed_sources: false,
+        full_provenance: false,
+        allow_remote: false,
+        max_pipelines: 1,
+        diff: diff_base.clone(),
+        changed_files: vec![],
+        inputs: vec![],
+        clone_missing: false,
+    };
+    let (output, _setup) = super::scan::run_scan(&scan_args, &scenario, &opts, vec![])?;
+    if output.merged_root.is_none() {
+        super::print_diagnostics(&output.graph);
+        anyhow::bail!("the configuration could not be resolved locally");
+    }
+    let root = root_pipeline(&output)?;
+
+    let snapshot: PipelineSnapshot = match &args.pipeline_json {
+        Some(p) => serde_json::from_str(&std::fs::read_to_string(p)?)?,
+        None => fetch_pipeline(&args)?,
+    };
+    if let Some(p) = &args.save_oracle {
+        std::fs::write(p, serde_json::to_string_pretty(&snapshot)?)?;
+    }
+    let field = |k: &str| {
+        snapshot
+            .pipeline
+            .get(k)
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string()
+    };
+    println!(
+        "glpv check --pipeline: {} pipeline #{} — source {}, ref {}{}{}",
+        root.project.path,
+        snapshot
+            .pipeline
+            .get("id")
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "?".to_string()),
+        field("source"),
+        field("ref"),
+        if scenario.is_tag { " (tag)" } else { "" },
+        match &diff_base {
+            Some(b) => format!(", changes since {}", &b[..b.len().min(12)]),
+            None => ", no diff (new branch or tag)".to_string(),
+        }
+    );
+    let server =
+        check::pipeline_jobs_to_oracle(snapshot.jobs.iter().chain(snapshot.bridges.iter()));
+    let exit = report_jobs(root, &server, check::CompareFields::PIPELINE, "created");
+    super::print_diagnostics(&output.graph);
+    Ok(exit)
+}
+
+fn fetch_pipeline(args: &CheckArgs) -> anyhow::Result<PipelineSnapshot> {
+    let base = args
+        .api_url
+        .clone()
+        .or_else(|| env_nonempty("CI_API_V4_URL"))
+        .ok_or_else(|| {
+            anyhow::anyhow!("pass --api-url or run inside a GitLab CI job (CI_API_V4_URL)")
+        })?;
+    let project = args
+        .project_id
+        .clone()
+        .or_else(|| env_nonempty("CI_PROJECT_ID"))
+        .ok_or_else(|| {
+            anyhow::anyhow!("pass --project-id or run inside a GitLab CI job (CI_PROJECT_ID)")
+        })?;
+    let pipeline = args
+        .pipeline_id
+        .map(|v| v.to_string())
+        .or_else(|| env_nonempty("CI_PIPELINE_ID"))
+        .ok_or_else(|| {
+            anyhow::anyhow!("pass --pipeline-id or run inside a GitLab CI job (CI_PIPELINE_ID)")
+        })?;
+    let auth = if let Some(t) = env_nonempty("CI_JOB_TOKEN") {
+        format!("JOB-TOKEN: {t}")
+    } else if let Some(t) = env_nonempty("GLPV_TOKEN").or_else(|| env_nonempty("GITLAB_TOKEN")) {
+        format!("PRIVATE-TOKEN: {t}")
+    } else {
+        anyhow::bail!("no credential: run inside a CI job (CI_JOB_TOKEN) or set GLPV_TOKEN");
+    };
+    let get = |path: &str| -> anyhow::Result<String> {
+        let url = format!(
+            "{}/projects/{}/pipelines/{}{}",
+            base.trim_end_matches('/'),
+            encode_path(&project),
+            pipeline,
+            path
+        );
+        curl_get(&url, &auth)
+    };
+    let pipeline_json: serde_json::Value = serde_json::from_str(&get("")?)?;
+    if let Some(m) = pipeline_json.get("message") {
+        anyhow::bail!("the server answered with an error: {m}");
+    }
+    let mut jobs = Vec::new();
+    let mut bridges = Vec::new();
+    for (kind, out) in [("jobs", &mut jobs), ("bridges", &mut bridges)] {
+        for page in 1..=100u32 {
+            let raw = get(&format!("/{kind}?per_page=100&page={page}"))?;
+            let batch: Vec<check::PipelineJob> = serde_json::from_str(&raw).map_err(|e| {
+                anyhow::anyhow!("unexpected {kind} response ({e}): {}", oneline(&raw))
+            })?;
+            let n = batch.len();
+            out.extend(batch);
+            if n < 100 {
+                break;
+            }
+        }
+    }
+    Ok(PipelineSnapshot {
+        pipeline: pipeline_json,
+        jobs,
+        bridges,
+    })
+}
+
+fn curl_get(url: &str, auth_header: &str) -> anyhow::Result<String> {
+    let out = Command::new("curl")
+        .args([
+            "--silent",
+            "--show-error",
+            "--fail-with-body",
+            "-H",
+            auth_header,
+            url,
+        ])
+        .output()
+        .map_err(|e| anyhow::anyhow!("cannot run curl: {e}"))?;
+    let body = String::from_utf8_lossy(&out.stdout).into_owned();
+    if !out.status.success() {
+        anyhow::bail!(
+            "GET {url}: {}{}",
+            String::from_utf8_lossy(&out.stderr).trim(),
+            if body.is_empty() {
+                String::new()
+            } else {
+                format!(" — {}", oneline(&body))
+            }
+        );
+    }
+    Ok(body)
+}
+
 fn run_inner(args: CheckArgs) -> anyhow::Result<i32> {
+    if args.pipeline {
+        return run_pipeline(args);
+    }
     let scenario = args.scenario.to_scenario()?;
     let opts = ResolveOpts {
         max_pipelines: 1,
@@ -90,13 +372,7 @@ fn run_inner(args: CheckArgs) -> anyhow::Result<i32> {
         super::print_diagnostics(&output.graph);
         anyhow::bail!("the configuration could not be resolved locally");
     };
-    let root = output
-        .graph
-        .pipelines
-        .iter()
-        .find(|p| p.kind == glpv_core::model::PipelineKind::Root)
-        .or_else(|| output.graph.pipelines.first())
-        .ok_or_else(|| anyhow::anyhow!("no pipeline was resolved"))?;
+    let root = root_pipeline(&output)?;
     let entry_text = root
         .entry_source
         .and_then(|f| output.graph.sources.iter().find(|s| s.file == f))
@@ -176,48 +452,12 @@ fn run_inner(args: CheckArgs) -> anyhow::Result<i32> {
         match &oracle.jobs {
             None => println!("jobs: the server returned no job list (include_jobs unsupported?)"),
             Some(server_jobs) => {
-                let local_jobs = check::local_jobs(root);
-                let r = check::compare_jobs(&local_jobs, server_jobs);
-                let expected = local_jobs
-                    .iter()
-                    .filter(|j| {
-                        matches!(
-                            j.outcome,
-                            glpv_core::model::Outcome::Runs
-                                | glpv_core::model::Outcome::Manual
-                                | glpv_core::model::Outcome::Delayed
-                        )
-                    })
-                    .count();
-                println!(
-                    "jobs: server would create {}; local expects {} to run ({} undecided){}",
-                    server_jobs.len(),
-                    expected,
-                    r.undecided.len(),
-                    if r.is_clean() { " — identical" } else { "" }
-                );
-                for j in &r.missing_on_server {
-                    println!("  local runs, server does not create: {j}");
-                }
-                for j in &r.unexpected_on_server {
-                    println!("  server creates, local skips or lacks: {j}");
-                }
-                for (job, field, a, b) in &r.field_mismatches {
-                    println!(
-                        "  {job}: {field} differs\n    local:  {}\n    server: {}",
-                        oneline(a),
-                        oneline(b)
-                    );
-                }
-                if !r.undecided.is_empty() {
-                    println!(
-                        "  undecided locally (unknown variables): {}",
-                        r.undecided.join(", ")
-                    );
-                }
-                if !r.is_clean() {
-                    exit = 1;
-                }
+                exit = exit.max(report_jobs(
+                    root,
+                    server_jobs,
+                    check::CompareFields::ALL,
+                    "would create",
+                ));
             }
         }
     }
