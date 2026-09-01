@@ -51,7 +51,11 @@ pub fn run(args: ServeArgs) -> anyhow::Result<()> {
         let (tx, rx) = mpsc::channel::<PathBuf>();
         let out_dir = std::fs::canonicalize(&scan_args.out).unwrap_or(scan_args.out.clone());
         let mut watcher = notify::recommended_watcher(move |ev: notify::Result<notify::Event>| {
-            if let Ok(ev) = ev {
+            // Reads (the rescan's own git calls open files and directories)
+            // arrive as access events; only writes are changes.
+            if let Ok(ev) = ev
+                && !matches!(ev.kind, notify::EventKind::Access(_))
+            {
                 for p in ev.paths {
                     let _ = tx.send(p);
                 }
